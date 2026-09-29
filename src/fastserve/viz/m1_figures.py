@@ -153,11 +153,18 @@ def kv_growth(cfg: ModelConfig, hw: Records) -> tuple[plt.Figure, str]:
 def attention_patterns(m1: Records) -> tuple[plt.Figure, str]:
     data = metrics_of(m1, "attention_maps")[0]
     layers = list(data["maps"])
-    fig, axes = plt.subplots(1, len(layers) + 1, figsize=(4 * len(layers) + 4, 3.8))
-    for ax, layer in zip(axes, layers, strict=False):
+    fig, axes = plt.subplots(
+        1, len(layers) + 1, figsize=(4 * len(layers) + 4, 3.8), gridspec_kw={"wspace": 0.35}
+    )
+    for i, (ax, layer) in enumerate(zip(axes, layers, strict=False)):
         probs = np.array(data["maps"][layer])
         ax.imshow(probs, cmap="viridis", vmin=0, vmax=1)
-        ax.set(title=f"layer {layer}, head {data['head']}", xlabel="key position", ylabel="query position")
+        ticks = range(0, len(probs), max(1, len(probs) // 4))
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        ax.set(title=f"layer {layer}, head {data['head']}", xlabel="key position")
+        if i == 0:
+            ax.set_ylabel("query position")
         ax.grid(False)
     sink = np.array(data["sink_by_layer"])
     axes[-1].bar(range(len(sink)), sink, color=OKABE_ITO["blue"])
@@ -183,7 +190,8 @@ def block_table(m1: Records) -> tuple[plt.Figure, str, Any]:
     run = batching_summary(m1)
     n, log = run["num_blocks"], run["log"]
     cols = 8
-    picks = np.linspace(0, len(log) - 1, 4).astype(int)
+    busy = [i for i, snapshot in enumerate(log) if snapshot["running"]]  # skip empty-pool snapshots
+    picks = [busy[int(k)] for k in np.linspace(0, len(busy) - 1, 4)]
     fig, axes = plt.subplots(1, 4, figsize=(12, 3.4))
     cmap = plt.get_cmap("tab10").with_extremes(under="#EEEEEE")
     for ax, i in zip(axes, picks, strict=True):
