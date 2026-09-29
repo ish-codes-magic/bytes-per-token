@@ -1,0 +1,1 @@
+BF16 reaches 47% of datasheet peak at M=8192 but only 0.1% at M=1: decode-sized matmuls can't fill the GPU.

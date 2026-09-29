@@ -1,0 +1,1 @@
+Large reads reach 262 GB/s, 87% of the 300 GB/s datasheet figure; transfers that fit in L2 peak at 1365 GB/s (cache, not memory).
