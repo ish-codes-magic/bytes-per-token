@@ -13,4 +13,7 @@ def test_hw_summary_puts_measured_next_to_datasheet(probe_records):
     assert "| BF16 matmul peak (TFLOP/s) | 90.0 | 121 | 74% |" in text
     assert "| Kernel launch, eager (µs per kernel) | 6.00 | — | — |" in text
     assert "| Power, streaming memory (W) | — | — | — |" in text  # missing readings stay visible as dashes
-    assert "2040 → 1900" in text  # clock drop between start and end is shown, not hidden
+    # A power-capped GPU runs below its maximum clock; the table shows it and scales the datasheet peak to it.
+    assert "| SM clock, sustained BF16 matmul (MHz) | 1,020 | 2,040 | 50% |" in text
+    assert "| BF16 datasheet peak at that clock (TFLOP/s) | 60.5 | 121 | 50% |" in text
+    assert "58 → 69" in text

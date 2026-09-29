@@ -105,14 +105,22 @@ def hw_summary(records: Records) -> str:
             ]
         )
 
+    # A power-capped GPU lowers its clock under sustained load; datasheet peaks assume the maximum clock.
     start = (single(records, "gpu_info") or {}).get("telemetry") or {}
     end = (single(records, "gpu_info_end") or {}).get("telemetry") or {}
+    max_clock = start.get("max_sm_clock_mhz")
+    loaded = power.get("matmul_bf16_8192") or {}
+    clock = loaded.get("mean_sm_clock_mhz")
+    rows.append(
+        ["SM clock, sustained BF16 matmul (MHz)", _num(clock), _num(max_clock), _ratio(clock, max_clock)]
+    )
+    scaled = spec_peaks["bf16"] * clock / max_clock if "bf16" in spec_peaks and clock and max_clock else None
     rows.append(
         [
-            "SM clock start → end (MHz)",
-            f"{start.get('sm_clock_mhz', DASH)} → {end.get('sm_clock_mhz', DASH)}",
-            _num(start.get("max_sm_clock_mhz")),
-            DASH,
+            "BF16 datasheet peak at that clock (TFLOP/s)",
+            _num(scaled, 1e12, 1),
+            _num(spec_peaks.get("bf16"), 1e12),
+            _ratio(scaled, spec_peaks.get("bf16")),
         ]
     )
     rows.append(

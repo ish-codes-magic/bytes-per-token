@@ -34,7 +34,8 @@ def probe_records() -> list[dict[str, Any]]:
     def rec(experiment: str, metrics: dict[str, Any]) -> dict[str, Any]:
         return make_record(experiment, metrics, run_id="testrun", env=env, git=git)
 
-    records = [rec("gpu_info", {"spec": SPECS["L4"].to_dict(), "telemetry": {"sm_clock_mhz": 2040}})]
+    idle_telemetry = {"sm_clock_mhz": 210, "max_sm_clock_mhz": 2040, "temperature_c": 58}
+    records = [rec("gpu_info", {"spec": SPECS["L4"].to_dict(), "telemetry": idle_telemetry})]
     for log2 in (12, 20, 24, 28, 30):  # 4 KiB ... 1 GiB; only 2^28 and 2^30 exceed 4 × the 48 MiB L2
         for method, base in (("copy", 200.0), ("read", 250.0)):
             gbps = base + log2
@@ -69,9 +70,15 @@ def probe_records() -> list[dict[str, Any]]:
             {
                 "idle": {"mean_w": 16.0, "max_w": 17.0, "n_samples": 10},
                 "copy_1gib": None,
-                "matmul_bf16_8192": {"mean_w": 70.0, "max_w": 72.0, "n_samples": 10},
+                "matmul_bf16_8192": {
+                    "mean_w": 70.0,
+                    "max_w": 72.0,
+                    "mean_sm_clock_mhz": 1020.0,
+                    "min_sm_clock_mhz": 990,
+                    "n_samples": 10,
+                },
             },
         )
     )
-    records.append(rec("gpu_info_end", {"telemetry": {"sm_clock_mhz": 1900}}))
+    records.append(rec("gpu_info_end", {"telemetry": {"sm_clock_mhz": 990, "temperature_c": 69}}))
     return records
