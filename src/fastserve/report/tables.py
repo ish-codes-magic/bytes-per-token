@@ -28,6 +28,42 @@ def provenance(records: Records) -> str:
     )
 
 
+def _sig(x: float) -> str:
+    """Three significant figures: enough to compare against a back-of-envelope prediction."""
+    return f"{x:,.3g}" if abs(x) < 1000 else f"{x:,.0f}"
+
+
+def prediction_table(predictions: dict[str, Any], observed: dict[str, float | None]) -> str:
+    """Predicted vs measured, one row per prediction, with an automatic verdict.
+
+    A prediction is either a range ("low"/"high") or a point estimate ("point").
+    Ranges get within/below/above; point estimates get the measured/predicted ratio.
+    """
+    rows = []
+    for p in predictions["predictions"]:
+        value = observed.get(p["id"])
+        if "point" in p:
+            predicted = f"~{_sig(p['point'])}"
+            verdict = (
+                f"{value / p['point']:.2g}× the prediction" if value is not None and p["point"] else DASH
+            )
+        else:
+            predicted = f"{_sig(p['low'])} – {_sig(p['high'])}"
+            if value is None:
+                verdict = DASH
+            elif value < p["low"]:
+                verdict = "below range"
+            elif value > p["high"]:
+                verdict = "above range"
+            else:
+                verdict = "within range"
+        rows.append([p["label"], predicted, DASH if value is None else _sig(value), verdict])
+    note = (
+        f"*Predictions written in commit `{predictions['written_in_commit']}`, before the first measurement.*"
+    )
+    return f"{note}\n\n" + markdown_table(["Quantity", "Predicted", "Measured", "Verdict"], rows)
+
+
 def _num(x: float | None, scale: float = 1.0, digits: int = 0) -> str:
     return DASH if x is None else f"{x / scale:,.{digits}f}"
 

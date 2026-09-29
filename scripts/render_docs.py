@@ -7,14 +7,16 @@ Stdlib only, so it runs on the laptop:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package, only its stdlib-only modules
 
+from fastserve.hw.analysis import m0_observables  # noqa: E402
 from fastserve.report.render import render_file  # noqa: E402
-from fastserve.report.tables import hw_summary  # noqa: E402
+from fastserve.report.tables import hw_summary, prediction_table  # noqa: E402
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
 
 
@@ -22,7 +24,12 @@ def build_blocks() -> dict[str, str]:
     blocks: dict[str, str] = {}
     probe = REPO / "results" / "raw" / "hw_probe.jsonl"
     if probe.exists():
-        blocks["hw_summary"] = hw_summary(latest_run(read_jsonl(probe)))
+        records = latest_run(read_jsonl(probe))
+        blocks["hw_summary"] = hw_summary(records)
+        predictions = json.loads(
+            (REPO / "benchmarks" / "predictions" / "m0.json").read_text(encoding="utf-8")
+        )
+        blocks["m0_predictions"] = prediction_table(predictions, m0_observables(records))
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

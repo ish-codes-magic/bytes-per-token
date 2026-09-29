@@ -1,0 +1,20 @@
+{
+  "milestone": "M0",
+  "written_in_commit": "82f62cc",
+  "note": "Copied unchanged from the prediction table in docs/learning/M0-foundations.md, which was committed before the first measurement.",
+  "predictions": [
+    {"id": "read_bandwidth_gbps", "label": "Read bandwidth, transfers >= 4x L2 (GB/s)", "low": 250, "high": 275},
+    {"id": "copy_bandwidth_gbps", "label": "Copy bandwidth, transfers >= 4x L2 (GB/s)", "low": 230, "high": 265},
+    {"id": "l2_speedup", "label": "Best 1-32 MiB transfer vs memory bandwidth (x)", "low": 1.5, "high": 3.0},
+    {"id": "tiny_transfer_gbps", "label": "4 KiB transfer (GB/s)", "low": 0, "high": 10},
+    {"id": "bf16_peak_tflops", "label": "BF16 matmul peak (TFLOP/s)", "low": 75, "high": 100},
+    {"id": "fp8_over_bf16", "label": "FP8 peak / BF16 peak (x)", "low": 1.6, "high": 1.9},
+    {"id": "bf16_m1_pct_of_peak", "label": "BF16 M=1, N=K=4096 (% of datasheet peak)", "point": 0.2},
+    {"id": "bf16_ridge", "label": "BF16 ridge point (FLOPs/byte)", "point": 330},
+    {"id": "eager_launch_us", "label": "Kernel launch, eager (us per kernel)", "low": 4, "high": 10},
+    {"id": "graph_launch_us", "label": "Kernel launch, CUDA graph (us per kernel)", "low": 1, "high": 3},
+    {"id": "idle_power_w", "label": "Power, idle (W)", "low": 15, "high": 25},
+    {"id": "copy_power_w", "label": "Power, streaming memory (W)", "low": 40, "high": 60},
+    {"id": "matmul_power_w", "label": "Power, BF16 matmul (W)", "point": 70}
+  ]
+}
