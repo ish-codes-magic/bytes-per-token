@@ -61,8 +61,9 @@ def environment_info() -> dict[str, Any]:
         import torch
     except ImportError:
         return info
-    info["torch"] = torch.__version__
-    info["cuda_runtime"] = torch.version.cuda
+    # str(): torch.__version__ is a TorchVersion, and unpickling that on the laptop would need PyTorch.
+    info["torch"] = str(torch.__version__)
+    info["cuda_runtime"] = str(torch.version.cuda)
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         info["gpu"] = props.name
@@ -99,6 +100,16 @@ def make_record(
         "git": git or {},
         "env": env if env is not None else environment_info(),
     }
+
+
+def to_plain(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A JSON round trip: guarantees only plain Python types remain.
+
+    Cloud functions return their records through this. Results are pickled on the way back to the laptop,
+    and a library type hiding inside (e.g. torch's TorchVersion, a str subclass) would need that library
+    installed there just to unpickle.
+    """
+    return json.loads(json.dumps(records))
 
 
 def append_jsonl(path: str | Path, records: Iterable[dict[str, Any]]) -> int:

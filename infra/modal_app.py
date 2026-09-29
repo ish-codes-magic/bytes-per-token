@@ -59,8 +59,9 @@ def hw_probe(config_text: str, config_path: str, git: dict) -> list[dict]:
     import yaml
 
     from fastserve.hw.probe import run_probe
+    from fastserve.results import to_plain
 
-    return run_probe(yaml.safe_load(config_text), git=git, config_path=config_path)
+    return to_plain(run_probe(yaml.safe_load(config_text), git=git, config_path=config_path))
 
 
 @app.function(cpu=2, memory=4096, timeout=10 * 60)

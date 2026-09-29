@@ -1,4 +1,12 @@
-from fastserve.results import SCHEMA_VERSION, append_jsonl, git_info, latest_run, make_record, read_jsonl
+from fastserve.results import (
+    SCHEMA_VERSION,
+    append_jsonl,
+    git_info,
+    latest_run,
+    make_record,
+    read_jsonl,
+    to_plain,
+)
 
 
 def test_make_record_carries_metadata():
@@ -18,6 +26,20 @@ def test_make_record_carries_metadata():
 def test_make_record_collects_environment_by_default():
     env = make_record("demo", {}, run_id="abc")["env"]
     assert {"python", "os", "cpu", "cpu_count"} <= env.keys()
+
+
+def test_environment_info_uses_only_plain_types():
+    # Records are unpickled on a laptop without PyTorch: a str subclass like TorchVersion would break that.
+    env = make_record("demo", {}, run_id="abc")["env"]
+    assert all(type(value) in (str, int, float, bool, type(None)) for value in env.values()), env
+
+
+def test_to_plain_strips_library_types():
+    class Version(str):  # stands in for torch's TorchVersion
+        pass
+
+    plain = to_plain([{"torch": Version("2.14.0")}])
+    assert type(plain[0]["torch"]) is str
 
 
 def test_jsonl_round_trip_appends(tmp_path):
