@@ -1,6 +1,6 @@
 {
   "milestone": "M1",
-  "written_in_commit": "PENDING",
+  "written_in_commit": "1042ea5",
   "note": "Written before running Qwen3-0.6B through nanoserve on the L4. Reasoning is in docs/learning/M1-nanoserve.md, section 4.",
   "predictions": [
     {"id": "parity_top1", "label": "BF16 top-1 agreement with Hugging Face (%)", "low": 99, "high": 100},
