@@ -33,3 +33,7 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   minute before Modal notices. After any interrupted run, check `modal app list` (and `modal app stop <id>`).
 - **Process:** the first full probe was stopped before finishing because the probe code wasn't committed yet, so its
   records would have pointed at a commit that doesn't contain the code. Probe runs now start from a clean tree.
+- **Bug (cost one probe run):** the full probe finished on the L4, but its results couldn't be unpickled on the
+  laptop. `torch.__version__` is a `TorchVersion` (a `str` subclass), and unpickling it needs PyTorch, which the
+  laptop deliberately lacks. Fix: record versions with `str()`, and pass every cloud function's return value through
+  a JSON round trip (`results.to_plain`), so only plain types cross the boundary. There's a test for each.
