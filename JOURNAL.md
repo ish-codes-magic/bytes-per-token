@@ -24,3 +24,12 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   **Rule: always run cloud commands under a local time limit** (e.g. `timeout 900 ...`).
 - **Windows quirk:** the Modal CLI prints "✓", which the default Windows console encoding can't handle. Run with
   `PYTHONUTF8=1`.
+
+## 2026-09-30
+
+- **Resolved watch item:** PyTorch 2.14.0 (CUDA 13.0) runs on Modal's L4 driver. All 3 GPU tests pass, including a
+  quick probe run.
+- **Cost check:** after the local `modal run` process is killed, its cloud app keeps running for up to about a
+  minute before Modal notices. After any interrupted run, check `modal app list` (and `modal app stop <id>`).
+- **Process:** the first full probe was stopped before finishing because the probe code wasn't committed yet, so its
+  records would have pointed at a commit that doesn't contain the code. Probe runs now start from a clean tree.
