@@ -1,0 +1,1 @@
+Batch 1 decodes 20 tokens/s; batch 64 reaches 1,189 (60×) while each step takes only 1.1× longer.

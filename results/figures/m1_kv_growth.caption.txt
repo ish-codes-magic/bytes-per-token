@@ -1,0 +1,1 @@
+Each token costs 112 KiB of KV cache: at batch 32 the L4's free memory fills at about 5,477 tokens of context.

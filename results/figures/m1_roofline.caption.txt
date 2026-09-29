@@ -1,0 +1,1 @@
+At batch 1, nanoserve decode reaches 1/11 of what the roofline allows at its intensity: launch overhead, not memory or compute, limits it.

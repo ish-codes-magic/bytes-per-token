@@ -1,0 +1,1 @@
+Most layers pour attention onto the first token (an attention sink): layer 3 puts 82% of its weight there on average (63% across all 28 layers).
