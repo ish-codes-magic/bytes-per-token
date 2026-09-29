@@ -41,14 +41,21 @@ def _random_ids(vocab: int, shape: tuple[int, ...], seed: int, device: str = "cu
 
 
 @torch.inference_mode()
-def hf_parity(model_dir: str, ours: CausalLM, prompts: list[str]) -> list[dict[str, Any]]:
-    """Per prompt: how closely nanoserve's logits track Hugging Face's (same weights, same dtype)."""
+def hf_parity(
+    model_dir: str, ours: CausalLM, prompts: list[str], *, attn_implementation: str = "eager"
+) -> list[dict[str, Any]]:
+    """Per prompt: how closely nanoserve's logits track Hugging Face's (same weights, same dtype).
+
+    "eager" is Hugging Face's plain-PyTorch attention, the same math in the same order as ours. "sdpa" uses
+    PyTorch's fused attention kernel: comparing against it is a negative control, showing the comparison can
+    detect small numerical differences at all.
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     dtype = ours.lm_head.weight.dtype
     hf = (
-        AutoModelForCausalLM.from_pretrained(model_dir, dtype=dtype, attn_implementation="eager")
+        AutoModelForCausalLM.from_pretrained(model_dir, dtype=dtype, attn_implementation=attn_implementation)
         .cuda()
         .eval()
     )
@@ -62,6 +69,7 @@ def hf_parity(model_dir: str, ours: CausalLM, prompts: list[str]) -> list[dict[s
         )
         rows.append(
             {
+                "hf_attention": attn_implementation,
                 "prompt": prompt,
                 "tokens": ids.shape[1],
                 "max_abs_diff": diff.max().item(),
@@ -288,8 +296,9 @@ def run_m1(
     model = load_pretrained(model_dir, device="cuda", dtype=dtype)
     torch.manual_seed(seed)
 
-    for row in hf_parity(model_dir, model, prompts["parity"]):
-        add("hf_parity", row)
+    for implementation in ("eager", "sdpa"):
+        for row in hf_parity(model_dir, model, prompts["parity"], attn_implementation=implementation):
+            add("hf_parity", row)
 
     d = config["decode"]
     for batch in d["batch_sizes"]:
@@ -322,19 +331,26 @@ def run_m1(
         with torch.inference_mode():
             return model(token, position, cache, select=zeros).argmax(-1)
 
-    length = p["prefill_len"]
-    prefill_ids = _random_ids(model.config.vocab_size, (1, length), seed)
-    prefill_cache = ContiguousKVCache(model.config, max_batch=1, max_len=length, dtype=dtype, device="cuda")
-    last = torch.tensor([length - 1], device="cuda")
+    def make_prefill(length: int):
+        ids = _random_ids(model.config.vocab_size, (1, length), seed)
+        prefill_cache = ContiguousKVCache(
+            model.config, max_batch=1, max_len=length, dtype=dtype, device="cuda"
+        )
+        positions, last = torch.arange(length, device="cuda")[None], torch.tensor([length - 1], device="cuda")
 
-    def prefill_once():
-        with torch.inference_mode():
-            return model(prefill_ids, torch.arange(length, device="cuda")[None], prefill_cache, select=last)
+        def prefill_once():
+            with torch.inference_mode():
+                return model(ids, positions, prefill_cache, select=last)
+
+        return prefill_once
 
     add("kernel_profile", kernel_profile(decode_once, label=f"decode, batch {b}"))
-    add("kernel_profile", kernel_profile(prefill_once, label=f"prefill, {length} tokens"))
     add("component_times", component_times(model, decode_once, label=f"decode, batch {b}"))
-    add("component_times", component_times(model, prefill_once, label=f"prefill, {length} tokens"))
+    for length in p["prefill_lens"]:
+        prefill_once = make_prefill(length)
+        add("kernel_profile", kernel_profile(prefill_once, label=f"prefill, {length} tokens"))
+        add("component_times", component_times(model, prefill_once, label=f"prefill, {length} tokens"))
+        torch.cuda.empty_cache()
 
     from transformers import AutoTokenizer
 

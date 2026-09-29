@@ -17,7 +17,7 @@ prefill:
 
 profile:                 # kernel counts and GPU busy time, from torch.profiler
   decode_batch: 1
-  prefill_len: 512
+  prefill_lens: [512, 2048]
 
 attention_maps:
   layers: [0, 13, 27]    # first, middle, last
