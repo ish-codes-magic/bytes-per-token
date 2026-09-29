@@ -130,3 +130,90 @@ def make_tiny_qwen3():
     """Factory fixture: make_tiny_qwen3(tie_word_embeddings=...) -> (hf_model, nanoserve_model)."""
     pytest.importorskip("transformers")
     return tiny_qwen3_pair
+
+
+@pytest.fixture
+def m1_records() -> list[dict[str, Any]]:
+    """A small hand-made M1 run, shaped like the real one."""
+    env = {"gpu": "NVIDIA L4", "cpu": "x"}
+    git = {"commit": "0123456789abcdef", "dirty": False}
+
+    def rec(experiment: str, metrics: dict[str, Any]) -> dict[str, Any]:
+        return make_record(
+            experiment, metrics, run_id="m1test", env=env, git=git, config={"model": "Qwen/Qwen3-0.6B"}
+        )
+
+    records = []
+    for impl, diff, top1 in (("eager", 0.0, 1.0), ("sdpa", 0.05, 0.9)):
+        for prompt, tokens in (("The capital of France is", 5), ("def f(x):\n    return", 7)):
+            metrics = {
+                "hf_attention": impl,
+                "prompt": prompt,
+                "tokens": tokens,
+                "max_abs_diff": diff,
+                "mean_abs_diff": diff / 10,
+                "max_abs_logit": 20.0,
+                "top1_agreement": top1,
+                "mean_kl_hf_to_ours": diff / 100,
+            }
+            records.append(rec("hf_parity", metrics))
+    for batch, ms in ((1, 50.0), (16, 52.0), (64, 54.0)):
+        speed = {"batch": batch, "prompt_len": 128, "steps": 64, "step_ms_median": ms}
+        records.append(rec("decode_speed", {**speed, "tokens_per_s": batch / (ms / 1e3)}))
+    for length, ms in ((512, 52.0), (2048, 360.0)):
+        records.append(rec("prefill_speed", {"length": length, "ms_median": ms}))
+    matmul = {"matmul": {"count": 253, "ms": 5.4}, "elementwise": {"count": 1000, "ms": 1.6}}
+    records.append(
+        rec(
+            "kernel_profile",
+            {"label": "decode, batch 1", "kernels": 2000, "kernel_ms": 8.5, "by_category": matmul},
+        )
+    )
+    records.append(
+        rec(
+            "kernel_profile",
+            {"label": "prefill, 512 tokens", "kernels": 2200, "kernel_ms": 26.0, "by_category": matmul},
+        )
+    )
+    parts = {
+        "embedding": 0.2,
+        "RMSNorm": 14.0,
+        "attention block": 46.0,
+        "MLP": 7.0,
+        "LM head": 1.3,
+        "other (RoPE tables, sampling, Python)": 7.5,
+    }
+    for label in ("decode, batch 1", "prefill, 512 tokens"):
+        records.append(
+            rec("component_times", {"label": label, "total_ms": sum(parts.values()), "components_ms": parts})
+        )
+    maps = {str(layer): [[1.0, 0.0], [0.7, 0.3]] for layer in (0, 1)}
+    records.append(
+        rec("attention_maps", {"tokens": 2, "head": 0, "maps": maps, "sink_by_layer": [0.1, 0.8, 0.6]})
+    )
+    log = [
+        {
+            "step": 0,
+            "running": [0, 1],
+            "waiting": [2],
+            "block_tables": {"0": [0, 1], "1": [2]},
+            "free_blocks": 5,
+        },
+        {
+            "step": 1,
+            "running": [1, 2],
+            "waiting": [],
+            "block_tables": {"1": [2], "2": [0, 3]},
+            "free_blocks": 4,
+        },
+    ]
+    batching = {
+        "num_blocks": 8,
+        "block_size": 16,
+        "max_batch": 2,
+        "steps": 2,
+        "tokens_generated": 10,
+        "log": log,
+    }
+    records.append(rec("continuous_batching", batching))
+    return records

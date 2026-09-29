@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package,
 
 from fastserve.engine.config import ModelConfig  # noqa: E402
 from fastserve.hw.analysis import m0_observables  # noqa: E402
+from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.render import render_file  # noqa: E402
 from fastserve.report.tables import (  # noqa: E402
     decode_matmul_table,
@@ -39,6 +40,16 @@ def build_blocks() -> dict[str, str]:
         blocks["m0_predictions"] = prediction_table(predictions, m0_observables(records))
         qwen3 = ModelConfig.from_pretrained_json(REPO / "benchmarks" / "models" / "Qwen3-0.6B.config.json")
         blocks["m1_model_facts"] = model_facts(qwen3, "Qwen3-0.6B", records)
+    nanoserve = REPO / "results" / "raw" / "m1_nanoserve.jsonl"
+    if nanoserve.exists():
+        m1 = latest_run(read_jsonl(nanoserve))
+        predictions = json.loads(
+            (REPO / "benchmarks" / "predictions" / "m1.json").read_text(encoding="utf-8")
+        )
+        blocks["m1_predictions"] = prediction_table(predictions, m1_observables(m1))
+        blocks["m1_parity"] = parity_table(m1)
+        blocks["m1_speed"] = speed_table(m1)
+        blocks["m1_profile"] = profile_table(m1)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")
