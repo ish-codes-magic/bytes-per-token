@@ -1,4 +1,4 @@
-from fastserve.report.tables import hw_summary, markdown_table, prediction_table
+from fastserve.report.tables import decode_matmul_table, hw_summary, markdown_table, prediction_table
 
 
 def test_markdown_table_shape():
@@ -37,3 +37,10 @@ def test_prediction_table_verdicts():
     assert "| C | 1 – 2 | 3 | above range |" in text
     assert "| D | ~10 | 15 | 1.5× the prediction |" in text
     assert "| E | ~10 | — | — |" in text
+
+
+def test_decode_matmul_table_shows_how_fast_weights_stream(probe_records):
+    # Fake M=1, N=K=1024 BF16 row: a 2 MiB weight in ~16.9 µs is ~124 GB/s, 44% of the fake 280 GB/s.
+    text = decode_matmul_table(probe_records)
+    assert "| 1024 × 1024 | 2 | 17 | 124 | 44% |" in text
+    assert text.count("\n") == 3  # header + separator + the two BF16 M=1 shapes

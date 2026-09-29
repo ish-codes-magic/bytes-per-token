@@ -59,7 +59,10 @@ def probe_records() -> list[dict[str, Any]]:
                     metrics["error"] = "RuntimeError: m must be > 16"
                 else:
                     tflops = peak * (m / 8192) ** 0.5 * (nk / 8192)
-                    metrics.update(tflops_median=tflops, tflops_best=tflops)
+                    seconds = metrics["flops"] / (tflops * 1e12)
+                    metrics.update(
+                        tflops_median=tflops, tflops_best=tflops, timing={"median_ms": seconds * 1e3}
+                    )
                 records.append(rec("matmul", metrics))
     records.append(
         rec("launch_overhead", {"n_ops": 1000, "eager_us_per_kernel": 6.0, "graph_us_per_kernel": 1.5})

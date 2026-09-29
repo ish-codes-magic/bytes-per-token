@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package,
 
 from fastserve.hw.analysis import m0_observables  # noqa: E402
 from fastserve.report.render import render_file  # noqa: E402
-from fastserve.report.tables import hw_summary, prediction_table  # noqa: E402
+from fastserve.report.tables import decode_matmul_table, hw_summary, prediction_table  # noqa: E402
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
 
 
@@ -26,6 +26,7 @@ def build_blocks() -> dict[str, str]:
     if probe.exists():
         records = latest_run(read_jsonl(probe))
         blocks["hw_summary"] = hw_summary(records)
+        blocks["m0_decode_matmuls"] = decode_matmul_table(records)
         predictions = json.loads(
             (REPO / "benchmarks" / "predictions" / "m0.json").read_text(encoding="utf-8")
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastserve.hw.analysis import gpu_spec, measured_bandwidth, measured_peak_flops, single
+from fastserve.hw.analysis import gpu_spec, measured_bandwidth, measured_peak_flops, metrics_of, single
 from fastserve.perfmodel.roofline import ridge_point
 
 Records = list[dict[str, Any]]
@@ -26,6 +26,37 @@ def provenance(records: Records) -> str:
         f"PyTorch {env.get('torch')} · Triton {env.get('triton')} · host CPU {env.get('cpu')} · "
         f"run `{records[0]['run_id']}` · commit `{commit}` · {records[0]['timestamp']}*"
     )
+
+
+def decode_matmul_table(records: Records) -> str:
+    """BF16 matmuls at M=1 (decode at batch 1): how fast each weight really streams from memory."""
+    read_bw = measured_bandwidth(records, method="read")
+    decode_shaped = sorted(
+        (m for m in metrics_of(records, "matmul") if m["format"] == "bf16" and m["m"] == 1 and "timing" in m),
+        key=lambda m: m["n"],
+    )
+    rows = []
+    for m in decode_shaped:
+        weight_bytes = 2 * m["n"] * m["k"]  # BF16: 2 bytes per weight, every weight read once
+        seconds = m["timing"]["median_ms"] / 1e3
+        streamed = weight_bytes / seconds
+        rows.append(
+            [
+                f"{m['n']} × {m['k']}",
+                _num(weight_bytes, 2**20),
+                _num(seconds, 1e-6),
+                _num(streamed, 1e9),
+                _ratio(streamed, read_bw),
+            ]
+        )
+    headers = [
+        "Weight (N × K)",
+        "Size (MiB)",
+        "Time (µs)",
+        "Streamed at (GB/s)",
+        "vs measured read bandwidth",
+    ]
+    return markdown_table(headers, rows)
 
 
 def _sig(x: float) -> str:
