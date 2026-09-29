@@ -25,7 +25,7 @@ def test_m1_tables(m1_records):
     assert parity.count("| eager |") == 2 and parity.count("| sdpa |") == 2
     assert "def f(x):…" in parity  # multi-line prompts show their first line
     assert "| decode, batch 16 | 52.0 | 308 | 15.4× |" in speed_table(m1_records)
-    assert "| decode, batch 1 | 2,000 | 8.50 | 50.00 | 17% |" in profile_table(m1_records)
+    assert "| decode, batch 1 | 2,000 | 8.50 | 50.00 | 17% | 25.0 |" in profile_table(m1_records)
 
 
 def test_decode_at_batch_1_has_intensity_about_1():

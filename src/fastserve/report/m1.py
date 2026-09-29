@@ -117,10 +117,19 @@ def profile_table(records: Records) -> str:
                 f"{m['kernel_ms']:.2f}",
                 f"{step_ms:.2f}" if step_ms else "—",
                 f"{100 * m['kernel_ms'] / step_ms:.0f}%" if step_ms else "—",
+                f"{1e3 * step_ms / m['kernels']:.1f}" if step_ms else "—",
                 ", ".join(f"{name} {v['ms']:.1f} ms ({v['count']})" for name, v in top),
             ]
         )
-    headers = ["Step", "GPU kernels", "GPU busy (ms)", "Step time (ms)", "GPU busy", "Top kernel types"]
+    headers = [
+        "Step",
+        "GPU kernels",
+        "GPU busy (ms)",
+        "Step time (ms)",
+        "GPU busy",
+        "Step time per kernel (µs)",
+        "Top kernel types",
+    ]
     return markdown_table(headers, rows)
 
 
