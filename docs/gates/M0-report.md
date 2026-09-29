@@ -1,5 +1,8 @@
 # Gate Report: M0, Foundations
 
+> **Gate decision (2026-09-30):** approved by the owner. The explain-it-back questions are deferred for later study.
+> Tagged `v0.0-foundations`.
+
 ## What was built
 
 - **Cloud-only environment:** [`pyproject.toml`](../../pyproject.toml) + [`uv.lock`](../../uv.lock). The laptop

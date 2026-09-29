@@ -60,3 +60,4 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   per-matmul rates.
 - **Open question:** the SM clock wasn't sampled during FP8 matmuls. Add an FP8 power workload to the probe when
   M4 needs it.
+- **Gate M0 approved** (questions deferred by the owner). Tagged `v0.0-foundations`.
