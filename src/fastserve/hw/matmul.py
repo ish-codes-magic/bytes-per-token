@@ -40,11 +40,24 @@ def make_matmul(fmt: str, m: int, n: int, k: int) -> Callable[[], object]:
     raise ValueError(f"unknown format {fmt!r}; expected one of {FORMATS}")
 
 
-def matmul_throughput(fmt: str, m: int, n: int, k: int, *, iters: int = 30) -> dict[str, Any]:
-    """Time one matmul shape. The result has either `tflops_*` fields or an `error` field."""
-    result: dict[str, Any] = {"format": fmt, "m": m, "n": n, "k": k, "flops": matmul_flops(m, n, k)}
+def matmul_throughput(
+    fmt: str, m: int, n: int, k: int, *, iters: int = 30, flush_l2_bytes: int = 0
+) -> dict[str, Any]:
+    """Time one matmul shape. The result has either `tflops_*` fields or an `error` field.
+
+    With `flush_l2_bytes` the operands start "cold" (not in L2) each iteration, like model weights in decode.
+    """
+    result: dict[str, Any] = {
+        "format": fmt,
+        "m": m,
+        "n": n,
+        "k": k,
+        "flops": matmul_flops(m, n, k),
+        "cache": "cold" if flush_l2_bytes else "warm",
+    }
     try:
-        stats = summarize(cuda_time_ms(make_matmul(fmt, m, n, k), iters=iters))
+        run = make_matmul(fmt, m, n, k)
+        stats = summarize(cuda_time_ms(run, iters=iters, flush_l2_bytes=flush_l2_bytes))
     except (RuntimeError, TypeError, AttributeError, ValueError) as err:  # format/shape unsupported here
         result["error"] = f"{type(err).__name__}: {str(err).splitlines()[0][:300]}"
         return result
@@ -55,7 +68,17 @@ def matmul_throughput(fmt: str, m: int, n: int, k: int, *, iters: int = 30) -> d
 
 
 def matmul_sweep(
-    formats: Iterable[str], ms: Iterable[int], nks: Iterable[int], *, iters: int = 30
+    formats: Iterable[str],
+    ms: Iterable[int],
+    nks: Iterable[int],
+    *,
+    iters: int = 30,
+    flush_l2_bytes: int = 0,
 ) -> list[dict[str, Any]]:
     """Every (format, M, N=K) combination. N = K keeps the grid 2-D, which is enough to see the trend."""
-    return [matmul_throughput(fmt, m, nk, nk, iters=iters) for fmt in formats for m in ms for nk in nks]
+    return [
+        matmul_throughput(fmt, m, nk, nk, iters=iters, flush_l2_bytes=flush_l2_bytes)
+        for fmt in formats
+        for m in ms
+        for nk in nks
+    ]
