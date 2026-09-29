@@ -61,3 +61,9 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **Open question:** the SM clock wasn't sampled during FP8 matmuls. Add an FP8 power workload to the probe when
   M4 needs it.
 - **Gate M0 approved** (questions deferred by the owner). Tagged `v0.0-foundations`.
+- **Library check (AGENTS.md §2.3):** huggingface_hub 1.x reports a partial download as an
+  `IncompleteSnapshotError` under `local_files_only=True`, unless the lookup passes the same `allow_patterns` as the
+  download. All lookups now go through `engine.loader.model_dir`.
+- **transformers 5.17:** `from_pretrained` takes `dtype=` (not `torch_dtype=`), and configs store RoPE settings in
+  `rope_parameters`. The real Qwen3-0.6B `config.json` still uses the 4.x layout, so `ModelConfig.from_hf` accepts
+  both.
