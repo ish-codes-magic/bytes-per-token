@@ -9,6 +9,20 @@ import torch
 from fastserve.engine.config import ModelConfig
 from fastserve.engine.model import CausalLM
 
+# Everything nanoserve needs from a Hugging Face repo, and nothing else (no README, LICENSE, .gitattributes).
+MODEL_FILES = ["*.json", "*.safetensors", "*.txt", "tokenizer*"]
+
+
+def model_dir(repo_id: str, *, download: bool = False) -> str:
+    """Local directory of a Hugging Face model's config, tokenizer and weights.
+
+    huggingface_hub (1.x) treats a partial download as incomplete unless the lookup uses the same file
+    patterns as the download, so every caller goes through here.
+    """
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(repo_id, allow_patterns=MODEL_FILES, local_files_only=not download)
+
 
 def from_state_dict(
     cfg: ModelConfig, state: dict[str, torch.Tensor], *, device: torch.device | str, dtype: torch.dtype
