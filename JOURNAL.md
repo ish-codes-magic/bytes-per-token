@@ -53,3 +53,10 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   table shows this directly.
 - **Limitation:** Modal's gVisor sandbox hides the host CPU model (`/proc/cpuinfo` has no "model name"). Recorded as
   "unknown".
+- **M0 results (run `aed53c62b464`):** memory bandwidth landed inside the predicted range. BF16 compute fell below
+  it, because the L4 holds its SM clock at about half the maximum under sustained tensor math (power cap). Scaled to
+  that clock, cuBLAS is within a few percent of the hardware limit. Decode-shaped (M=1) matmuls stream their weights
+  well below the best-case bandwidth, and the smaller the weight the worse. M1's decode prediction must use those
+  per-matmul rates.
+- **Open question:** the SM clock wasn't sampled during FP8 matmuls. Add an FP8 power workload to the probe when
+  M4 needs it.
