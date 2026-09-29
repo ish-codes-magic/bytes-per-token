@@ -50,10 +50,14 @@ def snapshot() -> dict[str, Any] | None:
     }
 
 
-def average_power_during(
+def sample_during(
     work: Callable[[], object], *, duration_s: float = 3.0, interval_s: float = 0.02
 ) -> dict[str, Any] | None:
-    """Run `work` repeatedly for `duration_s` seconds while a background thread samples power draw."""
+    """Run `work` repeatedly for `duration_s` seconds while a background thread samples power and SM clock.
+
+    The clock matters as much as the power: a power-capped GPU lowers its clock to stay under the cap, and
+    compute throughput falls with it.
+    """
     import torch
 
     nvml = _nvml()
@@ -61,12 +65,14 @@ def average_power_during(
         return None
     m, h = nvml
 
-    samples: list[float] = []
+    power_w: list[float] = []
+    sm_clock_mhz: list[int] = []
     stop = threading.Event()
 
     def sample() -> None:
         while not stop.is_set():
-            samples.append(m.nvmlDeviceGetPowerUsage(h) / 1e3)
+            power_w.append(m.nvmlDeviceGetPowerUsage(h) / 1e3)
+            sm_clock_mhz.append(m.nvmlDeviceGetClockInfo(h, m.NVML_CLOCK_SM))
             time.sleep(interval_s)
 
     sampler = threading.Thread(target=sample, daemon=True)
@@ -77,4 +83,10 @@ def average_power_during(
         torch.cuda.synchronize()
     stop.set()
     sampler.join()
-    return {"mean_w": statistics.fmean(samples), "max_w": max(samples), "n_samples": len(samples)}
+    return {
+        "mean_w": statistics.fmean(power_w),
+        "max_w": max(power_w),
+        "mean_sm_clock_mhz": statistics.fmean(sm_clock_mhz),
+        "min_sm_clock_mhz": min(sm_clock_mhz),
+        "n_samples": len(power_w),
+    }

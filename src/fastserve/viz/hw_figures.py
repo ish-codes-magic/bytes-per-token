@@ -109,7 +109,7 @@ def roofline(records: Records) -> tuple[plt.Figure, str]:
             color=BASELINE_GRAY,
             marker="x",
             alpha=0.8,
-            label="BF16 matmuls (one per shape)",
+            label="BF16 matmuls, cold L2 (one per shape)",
         )
 
     ax.set(

@@ -12,6 +12,9 @@ matmul:
   m: [1, 8, 32, 128, 512, 2048, 8192]
   nk: [1024, 2048, 4096, 8192]
   iters: 30
+  # Evict operands from L2 before every timed run. Without this, weights up to 48 MiB stay cached and small-M
+  # matmuls look faster than memory allows (first run: ~745 GB/s "from memory" on a 300 GB/s GPU).
+  flush_l2: true
 
 launch_overhead:
   n_ops: 1000

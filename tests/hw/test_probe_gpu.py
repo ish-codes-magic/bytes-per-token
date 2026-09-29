@@ -9,7 +9,7 @@ pytestmark = pytest.mark.gpu
 
 QUICK_CONFIG = {
     "bandwidth": {"sizes_log2": [20, 28], "iters": 5},
-    "matmul": {"formats": ["bf16", "fp8", "int8"], "m": [1, 256], "nk": [1024], "iters": 5},
+    "matmul": {"formats": ["bf16", "fp8", "int8"], "m": [1, 256], "nk": [1024], "iters": 5, "flush_l2": True},
     "launch_overhead": {"n_ops": 100},
     "power": {"seconds_per_workload": 0.2},
 }
@@ -28,6 +28,21 @@ def test_read_kernel_really_reads_everything():
     out = torch.empty(grid[0], device="cuda")
     _sum_blocks_kernel()[grid](x, out, n, BLOCK=block)
     assert out.sum().item() == n
+
+
+def test_cold_matmul_cannot_stream_weights_faster_than_memory():
+    # The first probe run timed this shape warm: its 32 MiB weight sat in L2 and "streamed" at ~745 GB/s.
+    import torch
+
+    from fastserve.hw.matmul import matmul_throughput
+
+    spec = spec_for(torch.cuda.get_device_name(0))
+    if spec is None:
+        pytest.skip("no datasheet entry for this GPU")
+    result = matmul_throughput("bf16", 1, 4096, 4096, iters=10, flush_l2_bytes=2 * spec.l2_bytes)
+    weight_bytes = 2 * 4096 * 4096
+    achieved = weight_bytes / (result["timing"]["median_ms"] / 1e3)
+    assert achieved <= 1.05 * spec.bandwidth
 
 
 def test_cuda_time_returns_one_positive_time_per_iteration():
