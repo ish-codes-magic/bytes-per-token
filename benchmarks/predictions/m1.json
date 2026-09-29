@@ -1,0 +1,16 @@
+{
+  "milestone": "M1",
+  "written_in_commit": "PENDING",
+  "note": "Written before running Qwen3-0.6B through nanoserve on the L4. Reasoning is in docs/learning/M1-nanoserve.md, section 4.",
+  "predictions": [
+    {"id": "parity_top1", "label": "BF16 top-1 agreement with Hugging Face (%)", "low": 99, "high": 100},
+    {"id": "parity_max_abs", "label": "BF16 max |logit difference| vs Hugging Face", "low": 0, "high": 0.5},
+    {"id": "decode_kernels", "label": "GPU kernels per batch-1 decode step", "low": 1500, "high": 2500},
+    {"id": "decode_b1_tok_s", "label": "Batch-1 decode speed, eager nanoserve (tokens/s)", "low": 35, "high": 65},
+    {"id": "decode_b1_gpu_busy_pct", "label": "GPU busy fraction of a batch-1 decode step (%)", "low": 25, "high": 60},
+    {"id": "decode_b16_over_b1", "label": "Decode throughput, batch 16 / batch 1 (x)", "low": 12, "high": 16},
+    {"id": "decode_b64_over_b1", "label": "Decode throughput, batch 64 / batch 1 (x)", "low": 40, "high": 64},
+    {"id": "prefill_512_ms", "label": "Prefill of a 512-token prompt (ms)", "low": 15, "high": 35},
+    {"id": "prefill_2048_ms", "label": "Prefill of a 2048-token prompt (ms)", "low": 50, "high": 90}
+  ]
+}
