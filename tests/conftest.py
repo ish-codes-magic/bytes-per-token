@@ -85,3 +85,48 @@ def probe_records() -> list[dict[str, Any]]:
     )
     records.append(rec("gpu_info_end", {"telemetry": {"sm_clock_mhz": 990, "temperature_c": 69}}))
     return records
+
+
+# -- nanoserve: tiny random-weight Qwen3 models (no downloads) -----------------------------------------------
+
+TINY_QWEN3 = {
+    "vocab_size": 256,
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,  # GQA: 2 query heads per KV head
+    "head_dim": 16,
+    "max_position_embeddings": 256,
+    "initializer_range": 0.2,  # larger than default so logits are decisive (no near-ties in greedy tests)
+}
+
+
+def tiny_qwen3_pair(tie_word_embeddings: bool = False, seed: int = 0):
+    """(Hugging Face model, nanoserve model) with identical random weights, float32 on CPU."""
+    import torch
+    import transformers
+
+    from fastserve.engine.config import ModelConfig
+    from fastserve.engine.loader import from_state_dict
+
+    torch.manual_seed(seed)
+    hf_config = transformers.Qwen3Config(**TINY_QWEN3, tie_word_embeddings=tie_word_embeddings)
+    hf = transformers.Qwen3ForCausalLM._from_config(hf_config, attn_implementation="eager").eval()
+    ours = from_state_dict(
+        ModelConfig.from_hf(hf_config.to_dict()), hf.state_dict(), device="cpu", dtype=torch.float32
+    )
+    return hf, ours
+
+
+@pytest.fixture
+def tiny_model():
+    pytest.importorskip("transformers")
+    return tiny_qwen3_pair()[1]
+
+
+@pytest.fixture
+def make_tiny_qwen3():
+    """Factory fixture: make_tiny_qwen3(tie_word_embeddings=...) -> (hf_model, nanoserve_model)."""
+    pytest.importorskip("transformers")
+    return tiny_qwen3_pair
