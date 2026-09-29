@@ -1,0 +1,14 @@
+{
+  "note": "Fixed prompts for M1 correctness checks (Hugging Face parity, attention maps). Speed tests use seeded random token ids instead, because speed doesn't depend on content.",
+  "parity": [
+    "The capital of France is",
+    "def fibonacci(n):\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+    "Q: If a train travels 60 km in 45 minutes, what is its average speed in km/h?\nA:",
+    "Photosynthesis is the process by which plants",
+    "Translate to French: The weather is beautiful today.",
+    "Once upon a time, in a small village at the edge of a forest, there lived",
+    "SELECT name, COUNT(*) FROM orders GROUP BY",
+    "人工智能是"
+  ],
+  "attention": "The quick brown fox jumps over the lazy dog because the dog was too tired to chase it."
+}

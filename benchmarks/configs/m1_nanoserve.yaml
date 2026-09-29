@@ -1,0 +1,33 @@
+# M1: nanoserve on a real model. Read by fastserve.experiments.m1.run_m1.
+# Run: uv run --only-group local modal run infra/modal_app.py::m1
+
+model: Qwen/Qwen3-0.6B
+dtype: bfloat16
+prompts: benchmarks/workloads/m1_prompts.json
+seed: 0
+
+decode:
+  prompt_len: 128        # random token ids: speed doesn't depend on content
+  steps: 64              # timed decode steps per batch size (after warm-up)
+  batch_sizes: [1, 4, 16, 64, 256]
+
+prefill:
+  lengths: [128, 512, 2048]
+  repeats: 10
+
+profile:                 # kernel counts and GPU busy time, from torch.profiler
+  decode_batch: 1
+  prefill_len: 512
+
+attention_maps:
+  layers: [0, 13, 27]    # first, middle, last
+  head: 0
+
+continuous_batching:     # a small, busy pool so the block-table animation shows allocation and reuse
+  num_requests: 10
+  max_batch: 4
+  block_size: 16
+  num_blocks: 48
+  prompt_len: [20, 120]
+  max_new_tokens: [8, 64]
+  arrival_every: 3       # a new request every 3 steps
