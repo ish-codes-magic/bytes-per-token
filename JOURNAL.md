@@ -37,3 +37,19 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   laptop. `torch.__version__` is a `TorchVersion` (a `str` subclass), and unpickling it needs PyTorch, which the
   laptop deliberately lacks. Fix: record versions with `str()`, and pass every cloud function's return value through
   a JSON round trip (`results.to_plain`), so only plain types cross the boundary. There's a test for each.
+- **First full probe (run `8088e303e4bc`, kept in `results/raw/hw_probe.jsonl`).** Two measurement flaws, found by
+  the "too good to be true" rule:
+  1. *Cache hits in matmul timing.* BF16 M=1, N=K=4096 reached 0.74 TFLOP/s. That means its 32 MiB weight was
+     streaming at ~745 GB/s, almost 3× the measured memory bandwidth (262 GB/s). The weight fits in the 48 MiB L2,
+     so repeated iterations never touched memory. At N=K=8192 (128 MiB, too big for L2) the same shape streams at
+     ~260 GB/s, i.e. exactly memory speed. Fix: flush L2 before every timed matmul (outside the timed region). Real
+     decode reads ~1.2 GB of weights per token and can never live in L2.
+  2. *Contaminated idle power.* "Idle" was sampled right after heavy work while clocks were still high (mean 37 W,
+     max 63 W). A true idle reading at the start was 18 W. Fix: measure idle first.
+- **Finding: the L4 is power-limited.** Sustained BF16 matmuls sit at the 72 W cap, and the SM clock drops to
+  990 MHz (maximum 2,040). The datasheet's 121 TFLOP/s assumes the maximum clock. Scaled to 990 MHz that's
+  ~59 TFLOP/s, and the biggest matmul measured 57.9. Medium matmuls reach higher (71 TFLOP/s) because they finish
+  before the power limiter pulls the clock down. Next run: sample the SM clock during each power workload so the
+  table shows this directly.
+- **Limitation:** Modal's gVisor sandbox hides the host CPU model (`/proc/cpuinfo` has no "model name"). Recorded as
+  "unknown".
