@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -69,6 +70,14 @@ def apply_style() -> None:
             "svg.hashsalt": "bytes-per-token",  # deterministic SVG ids -> clean git diffs
         }
     )
+
+
+def save_html(fig: Any, name: str, out_dir: str | Path) -> Path:
+    """Write an interactive Plotly figure as <name>.html (Plotly's JavaScript is loaded from its CDN)."""
+    path = Path(out_dir) / f"{name}.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(path, include_plotlyjs="cdn", full_html=True)
+    return path
 
 
 def save_figure(fig: plt.Figure, name: str, caption: str, out_dir: str | Path) -> list[Path]:
