@@ -67,7 +67,7 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **transformers 5.17:** `from_pretrained` takes `dtype=` (not `torch_dtype=`), and configs store RoPE settings in
   `rope_parameters`. The real Qwen3-0.6B `config.json` still uses the 4.x layout, so `ModelConfig.from_hf` accepts
   both.
-- **M1 results (runs `2` of `m1_nanoserve.jsonl`; the two runs agree closely):**
+- **M1 results (runs `3b2ec4535995` and `d32c18962945`, which agree closely):**
   - nanoserve matches Hugging Face's eager attention **bit for bit** in BF16. The negative control (HF's fused
     SDPA kernel) differs by up to about 1.3 in the logits, so the comparison can detect differences.
   - Batch-1 decode is ~20 tokens/s: ~2,000 kernels per step at ~25 µs of CPU time each, with the GPU busy
