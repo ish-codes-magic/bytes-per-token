@@ -71,23 +71,34 @@ def roofline(records: Records) -> tuple[plt.Figure, str]:
     fig, ax = plt.subplots()
     intensity = np.logspace(-1, 4, 300)  # FLOPs per byte
 
+    # BF16 and FP8 only: INT8 lands almost exactly on FP8 and would hide it (it's in the heatmap and table).
+    label_offsets = {"bf16": (-78, 8), "fp8": (8, -14)}  # keep the ridge labels clear of the data points
     ridges: dict[str, float] = {}
-    for fmt in ("bf16", "fp8", "int8"):
+    for fmt in ("bf16", "fp8"):
         style = series_style(fmt)
         if bandwidth and fmt in peaks:
             roof = np.minimum(peaks[fmt], bandwidth * intensity) / 1e12
             ax.plot(intensity, roof, color=style["color"], label=f"measured {fmt.upper()}")
             ridges[fmt] = ridge_point(peak_flops=peaks[fmt], bandwidth=bandwidth)
             ax.plot(ridges[fmt], peaks[fmt] / 1e12, ls="none", ms=8, **style)
+            ax.annotate(
+                f"ridge ≈ {ridges[fmt]:.0f}",
+                (ridges[fmt], peaks[fmt] / 1e12),
+                textcoords="offset points",
+                xytext=label_offsets[fmt],
+                fontsize=8,
+                color=style["color"],
+            )
         if spec and fmt in spec["peak_flops"]:
             roof = np.minimum(spec["peak_flops"][fmt], spec["bandwidth"] * intensity) / 1e12
             ax.plot(
                 intensity,
                 roof,
                 ls="--",
-                lw=1,
+                lw=1.2,
                 color=style["color"],
-                alpha=0.6,
+                alpha=0.8,
+                zorder=3,  # on top: the BF16 datasheet roof sits almost exactly on the measured FP8 roof
                 label=f"datasheet {fmt.upper()}",
             )
 
@@ -111,6 +122,17 @@ def roofline(records: Records) -> tuple[plt.Figure, str]:
             alpha=0.8,
             label="BF16 matmuls, cold L2 (one per shape)",
         )
+        batch1 = [p for p in points if p[2] == 1]
+        if batch1:
+            ai, tflops, _ = max(batch1, key=lambda p: p[1])
+            ax.annotate(
+                "decode, batch 1",
+                (ai, tflops),
+                textcoords="offset points",
+                xytext=(10, 12),
+                fontsize=8,
+                arrowprops={"arrowstyle": "-", "color": BASELINE_GRAY},
+            )
 
     ax.set(
         xscale="log",
@@ -148,7 +170,10 @@ def matmul_efficiency(records: Records) -> tuple[plt.Figure, str]:
         if spec and f in spec["peak_flops"] and any(m["format"] == f for m in rows)
     ]
 
-    fig, axes = plt.subplots(1, max(len(formats), 1), figsize=(4 * max(len(formats), 1), 4), squeeze=False)
+    n_panels = max(len(formats), 1)
+    fig, axes = plt.subplots(1, n_panels, figsize=(3.6 * n_panels + 1, 4), squeeze=False, sharey=True)
+    # Unsupported shapes are drawn light gray so their "n/a" label stays readable.
+    cmap = plt.get_cmap("viridis").with_extremes(bad="#D9D9D9")
     image = None
     for ax, fmt in zip(axes[0], formats, strict=False):
         grid = np.full((len(ms), len(nks)), np.nan)
@@ -157,17 +182,23 @@ def matmul_efficiency(records: Records) -> tuple[plt.Figure, str]:
                 grid[ms.index(m["m"]), nks.index(m["n"])] = (
                     100 * m["tflops_median"] * 1e12 / spec["peak_flops"][fmt]
                 )
-        image = ax.imshow(grid, origin="lower", cmap="viridis", vmin=0, vmax=100, aspect="auto")
+        image = ax.imshow(
+            np.ma.masked_invalid(grid), origin="lower", cmap=cmap, vmin=0, vmax=100, aspect="auto"
+        )
         for i in range(len(ms)):
             for j in range(len(nks)):
                 value = grid[i, j]
-                text = "n/a" if math.isnan(value) else f"{value:.0f}" if value >= 1 else f"{value:.1f}"
-                color = "black" if not math.isnan(value) and value > 60 else "white"
+                if math.isnan(value):
+                    text, color = "n/a", "#404040"
+                else:
+                    text = f"{value:.0f}" if value >= 1 else f"{value:.1f}"
+                    color = "black" if value > 60 else "white"
                 ax.text(j, i, text, ha="center", va="center", fontsize=8, color=color)
         ax.set_xticks(range(len(nks)), [str(n) for n in nks])
         ax.set_yticks(range(len(ms)), [str(m) for m in ms])
-        ax.set(xlabel="N = K (layer width)", ylabel="M (≈ batch size)", title=fmt.upper())
+        ax.set(xlabel="N = K (layer width)", title=fmt.upper())
         ax.grid(False)
+    axes[0][0].set_ylabel("M (≈ batch size)")
     if image is not None:
         fig.colorbar(image, ax=axes[0].tolist(), label="% of datasheet peak (n/a = unsupported)")
     fig.suptitle("Matmul efficiency", fontweight="bold")
