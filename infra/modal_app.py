@@ -95,13 +95,25 @@ def m1_run(config_path: str, git: dict) -> list[dict]:
 
 
 @app.function(cpu=2, memory=4096, timeout=10 * 60)
-def render_hw_figures(records: list[dict]) -> dict[str, bytes]:
+def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, bytes]:
+    """Draw one milestone's figures from its raw records; returns {file name: bytes}."""
     import tempfile
 
-    from fastserve.viz.hw_figures import make_all
+    from fastserve.engine.config import ModelConfig
+    from fastserve.viz import hw_figures, m1_figures
 
     with tempfile.TemporaryDirectory() as tmp:
-        return {path.name: path.read_bytes() for path in make_all(records, tmp)}
+        if milestone == "m0":
+            written = hw_figures.make_all(raw["hw"], tmp)
+        elif milestone == "m1":
+            name = raw["m1"][0]["config"]["model"].split("/")[-1]
+            cfg = ModelConfig.from_pretrained_json(
+                Path(REMOTE, "benchmarks", "models", f"{name}.config.json")
+            )
+            written = m1_figures.make_all(raw["m1"], raw["hw"], cfg, tmp)
+        else:
+            raise ValueError(f"unknown milestone {milestone!r}")
+        return {path.name: path.read_bytes() for path in written}
 
 
 @app.local_entrypoint()
@@ -146,12 +158,20 @@ def m1(config: str = "benchmarks/configs/m1_nanoserve.yaml") -> None:
 
 
 @app.local_entrypoint()
-def figures() -> None:
+def figures(milestone: str = "all") -> None:
     from fastserve.results import latest_run, read_jsonl
 
-    records = latest_run(read_jsonl(REPO / "results" / "raw" / "hw_probe.jsonl"))
+    raw_dir = REPO / "results" / "raw"
+    raw = {
+        key: latest_run(read_jsonl(raw_dir / file))
+        for key, file in (("hw", "hw_probe.jsonl"), ("m1", "m1_nanoserve.jsonl"))
+        if (raw_dir / file).exists()
+    }
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for name, data in render_hw_figures.remote(records).items():
-        (out / name).write_bytes(data)
-        print(f"wrote results/figures/{name}")
+    for ms in ["m0", "m1"] if milestone == "all" else [milestone]:
+        if ms == "m1" and "m1" not in raw:
+            continue
+        for name, data in render_figures.remote(ms, raw).items():
+            (out / name).write_bytes(data)
+            print(f"wrote results/figures/{name}")
