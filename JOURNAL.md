@@ -16,3 +16,11 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   driver on the GPU host. Verify on the first Modal run.
 - **Deferred:** the Dockerfile (AGENTS.md M0) moves to M9. Until then the Modal image, built from the same lock
   file, is the reproducible environment.
+- **Surprise:** Modal won't start *any* function in an app that contains an L4 function until the account has a
+  payment method, even on the free-credit Starter plan. CPU tests were verified through a throwaway CPU-only app:
+  38 passed, 3 GPU tests skipped.
+- **Surprise (cost risk):** if a container fails *while starting* (for example on an import error), Modal keeps
+  restarting it for as long as the local `modal run` is alive. Function timeouts don't cover startup failures.
+  **Rule: always run cloud commands under a local time limit** (e.g. `timeout 900 ...`).
+- **Windows quirk:** the Modal CLI prints "✓", which the default Windows console encoding can't handle. Run with
+  `PYTHONUTF8=1`.
