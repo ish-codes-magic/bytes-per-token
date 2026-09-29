@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --frozen --only-group dev ruff check .
+      - run: uv run --frozen --only-group dev ruff format --check .
+
+  test-cpu:
+    # GPU-marked tests skip themselves here; they run on an L4 via `modal run infra/modal_app.py::test_gpu`.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen pytest -q
