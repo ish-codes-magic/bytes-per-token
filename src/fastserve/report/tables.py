@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastserve.engine.config import ModelConfig
 from fastserve.hw.analysis import gpu_spec, measured_bandwidth, measured_peak_flops, metrics_of, single
 from fastserve.perfmodel.roofline import ridge_point
 
@@ -25,6 +26,29 @@ def provenance(records: Records) -> str:
         f"*{env.get('gpu', 'unknown GPU')} · driver {env.get('driver')} · CUDA {env.get('cuda_runtime')} · "
         f"PyTorch {env.get('torch')} · Triton {env.get('triton')} · host CPU {env.get('cpu')} · "
         f"run `{records[0]['run_id']}` · commit `{commit}` · {records[0]['timestamp']}*"
+    )
+
+
+def model_facts(cfg: ModelConfig, name: str, records: Records) -> str:
+    """What one decode step must read, from config.json plus the M0-measured bandwidth."""
+    d, v = cfg.hidden_size, cfg.vocab_size
+    weight_bytes = 2 * cfg.num_params()  # BF16
+    embed_bytes = 2 * v * d
+    # Decode reads every layer weight once, plus the LM head (which *is* the embedding matrix when tied).
+    # The embedding lookup itself reads only one row per token.
+    decode_bytes = weight_bytes if cfg.tie_word_embeddings else weight_bytes - embed_bytes
+    read_bw = measured_bandwidth(records, method="read")
+    ceiling = read_bw / decode_bytes if read_bw else None
+    rows = [
+        ["Parameters", f"{cfg.num_params() / 1e6:,.0f} M"],
+        ["Weights in BF16", f"{weight_bytes / 1e9:.3f} GB"],
+        ["Embedding / LM head share of weights", f"{embed_bytes / weight_bytes:.0%}"],
+        ["Bytes read per decode step (batch 1, weights only)", f"{decode_bytes / 1e9:.3f} GB"],
+        ["KV cache per token (BF16)", f"{cfg.kv_bytes_per_token() / 1024:.0f} KiB"],
+        ["Batch-1 ceiling = measured read bandwidth ÷ bytes per step", _num(ceiling, digits=0) + " tokens/s"],
+    ]
+    return f"*{name}, from config.json; bandwidth from the M0 probe.*\n\n" + markdown_table(
+        ["Quantity", "Value"], rows
     )
 
 

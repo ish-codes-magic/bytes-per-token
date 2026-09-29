@@ -14,9 +14,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package, only its stdlib-only modules
 
+from fastserve.engine.config import ModelConfig  # noqa: E402
 from fastserve.hw.analysis import m0_observables  # noqa: E402
 from fastserve.report.render import render_file  # noqa: E402
-from fastserve.report.tables import decode_matmul_table, hw_summary, prediction_table  # noqa: E402
+from fastserve.report.tables import (  # noqa: E402
+    decode_matmul_table,
+    hw_summary,
+    model_facts,
+    prediction_table,
+)
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
 
 
@@ -31,6 +37,8 @@ def build_blocks() -> dict[str, str]:
             (REPO / "benchmarks" / "predictions" / "m0.json").read_text(encoding="utf-8")
         )
         blocks["m0_predictions"] = prediction_table(predictions, m0_observables(records))
+        qwen3 = ModelConfig.from_pretrained_json(REPO / "benchmarks" / "models" / "Qwen3-0.6B.config.json")
+        blocks["m1_model_facts"] = model_facts(qwen3, "Qwen3-0.6B", records)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

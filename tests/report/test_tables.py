@@ -44,3 +44,18 @@ def test_decode_matmul_table_shows_how_fast_weights_stream(probe_records):
     text = decode_matmul_table(probe_records)
     assert "| 1024 × 1024 | 2 | 17 | 124 | 44% |" in text
     assert text.count("\n") == 3  # header + separator + the two BF16 M=1 shapes
+
+
+def test_model_facts_for_qwen3(probe_records):
+    from pathlib import Path
+
+    from fastserve.engine.config import ModelConfig
+    from fastserve.report.tables import model_facts
+
+    path = Path(__file__).parents[2] / "benchmarks" / "models" / "Qwen3-0.6B.config.json"
+    text = model_facts(ModelConfig.from_pretrained_json(path), "Qwen3-0.6B", probe_records)
+    assert "| Parameters | 596 M |" in text
+    assert "| KV cache per token (BF16) | 112 KiB |" in text
+    assert (
+        "| Batch-1 ceiling = measured read bandwidth ÷ bytes per step | 235 tokens/s |" in text
+    )  # 280 / 1.192

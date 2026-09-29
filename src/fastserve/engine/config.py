@@ -51,7 +51,11 @@ class ModelConfig:
 
     @classmethod
     def from_pretrained(cls, model_dir: str | Path) -> ModelConfig:
-        return cls.from_hf(json.loads((Path(model_dir) / "config.json").read_text(encoding="utf-8")))
+        return cls.from_pretrained_json(Path(model_dir) / "config.json")
+
+    @classmethod
+    def from_pretrained_json(cls, path: str | Path) -> ModelConfig:
+        return cls.from_hf(json.loads(Path(path).read_text(encoding="utf-8")))
 
     @property
     def gqa_group(self) -> int:
