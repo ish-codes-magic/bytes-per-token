@@ -1,0 +1,3 @@
+# Keep Unix line endings on every platform, so diffs and generated files are identical everywhere.
+* text=auto eol=lf
+*.png binary
