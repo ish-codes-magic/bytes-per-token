@@ -56,21 +56,30 @@ def summarize(times_ms: Sequence[float]) -> TimingStats:
     )
 
 
-def cuda_time_ms(fn: Callable[[], object], *, warmup: int = 10, iters: int = 50) -> list[float]:
+def cuda_time_ms(
+    fn: Callable[[], object], *, warmup: int = 10, iters: int = 50, flush_l2_bytes: int = 0
+) -> list[float]:
     """Run `fn` `warmup` times untimed, then `iters` times timed with CUDA events.
 
     Returns one duration in milliseconds per timed iteration. All events are recorded first and the CPU
     synchronizes once at the end, so the timing loop itself adds no stalls between iterations.
+
+    `flush_l2_bytes > 0` overwrites a scratch buffer of that size before every timed iteration, outside the
+    timed region, which evicts fn's data from the L2 cache. Use it for "cold" measurements: in real decode the
+    weights are far bigger than L2 and always come from memory, so warm-cache timings would flatter them.
     """
     import torch
 
-    for _ in range(warmup):  # compilation, autotuning, allocator and cache warm-up happen here
+    scratch = torch.empty(flush_l2_bytes, dtype=torch.uint8, device="cuda") if flush_l2_bytes else None
+    for _ in range(warmup):  # compilation, autotuning and allocator warm-up happen here
         fn()
     torch.cuda.synchronize()
 
     starts = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     ends = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     for start, end in zip(starts, ends, strict=True):
+        if scratch is not None:
+            scratch.zero_()  # queued before `start`, so the flush itself is not timed
         start.record()
         fn()
         end.record()
