@@ -1,0 +1,43 @@
+[project]
+name = "fastserve"
+version = "0.0.1"
+description = "Making small LLMs serve faster and cheaper, with every gain explained from first principles."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "ish-codes-magic" }]
+requires-python = ">=3.10"
+# Heavy runtime dependencies. They are installed only inside the cloud image (infra/modal_app.py),
+# never on the development laptop.
+dependencies = [
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "nvidia-ml-py>=12.535",
+    "plotly>=5.20",
+    "pyyaml>=6.0",
+    "torch>=2.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+# The only things installed on the laptop: `uv sync --only-group local`.
+local = ["modal>=1.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fastserve"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests", "infra", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["gpu: needs a CUDA GPU (skipped automatically when none is available)"]
