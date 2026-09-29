@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 0 (foundations). Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 1 (nanoserve). Results appear below as each milestone lands.
 
 ---
 
@@ -94,8 +94,8 @@ Two sizes from one family show **how each gain changes with model size**.
 
 | # | Milestone | Status |
 |---|---|---|
-| M0 | Foundations: cloud environment, measured hardware roofline | 🔍 Gate review |
-| M1 | nanoserve: inference from scratch, prefill vs decode | ⏳ |
+| M0 | Foundations: cloud environment, measured hardware roofline | ✅ Done |
+| M1 | nanoserve: inference from scratch, prefill vs decode | 🚧 In progress |
 | M2 | Baselines: vLLM benchmarks + quality harness | ⏳ |
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ⏳ |
 | M4 | Quantization in production: format crossover vs batch size | ⏳ |
