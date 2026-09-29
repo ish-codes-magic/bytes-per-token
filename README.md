@@ -49,6 +49,20 @@ Every prediction was committed before measuring, and each gap is explained: the 
 running tensor math at about half its maximum clock. Details are in the
 [M0 learning doc](docs/learning/M0-foundations.md) and the [gate report](docs/gates/M0-report.md).
 
+### M1: nanoserve, an inference engine from scratch
+
+A readable Qwen3 engine in plain PyTorch (paged KV cache, continuous batching). Its logits match Hugging Face's
+**bit for bit** in BF16, with a negative control showing the comparison can detect differences. Profiling it shows
+what dominates when nothing is optimized:
+
+![Where a decode step's time goes](results/figures/m1_anatomy.png)
+
+<!-- BEGIN GENERATED: caption-m1_anatomy -->
+*In a decode, batch 1 step, the attention block takes 61% of the time; tiny ops like RMSNorm cost far more than their arithmetic, because every launch has a fixed cost.*
+<!-- END GENERATED: caption-m1_anatomy -->
+
+Details are in the [M1 learning doc](docs/learning/M1-nanoserve.md) and the [gate report](docs/gates/M1-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -95,7 +109,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | # | Milestone | Status |
 |---|---|---|
 | M0 | Foundations: cloud environment, measured hardware roofline | ✅ Done |
-| M1 | nanoserve: inference from scratch, prefill vs decode | 🚧 In progress |
+| M1 | nanoserve: inference from scratch, prefill vs decode | 🔍 Gate review |
 | M2 | Baselines: vLLM benchmarks + quality harness | ⏳ |
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ⏳ |
 | M4 | Quantization in production: format crossover vs batch size | ⏳ |
