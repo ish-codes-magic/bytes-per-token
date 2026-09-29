@@ -50,9 +50,9 @@ L4: 12.5 Gbit/s × 192 pins ÷ 8 = 300 GB/s.
 |---|---|---|
 | `bandwidth.copy_bandwidth` | `dst.copy_(src)` over sizes from 4 KiB to 1 GiB | read N + write N = 2N |
 | `bandwidth.read_bandwidth` | Triton kernel summing blocks of floats | read N (+ one float per block) |
-| `matmul.matmul_throughput` | BF16/FP16/FP8/INT8 matmuls, M ∈ {1…8192}, N = K ∈ {1024…8192} | 2·M·N·K |
+| `matmul.matmul_throughput` | BF16/FP16/FP8/INT8 matmuls, M ∈ {1…8192}, N = K ∈ {1024…8192}, **L2 flushed before each run** | 2·M·N·K |
 | `overhead.launch_overhead` | 1,000 tiny kernels launched one by one, then replayed as one CUDA graph | time per kernel |
-| `telemetry.average_power_during` | NVML power sampling while idle, copying, and doing BF16 matmuls | watts |
+| `telemetry.sample_during` | NVML power and SM-clock sampling while idle (measured first), copying, and doing BF16 matmuls | watts, MHz |
 
 Timing uses CUDA events after warm-up. Each point is the **median** of repeated runs.
 
@@ -77,21 +77,117 @@ Back-of-envelope, from the datasheet and experience with similar GPUs:
 ## 5. Result
 
 <!-- BEGIN GENERATED: hw_summary -->
+*NVIDIA L4 · driver 580.95.05 · CUDA 13.0 · PyTorch 2.14.0+cu130 · Triton 3.8.0 · host CPU unknown · run `aed53c62b464` · commit `d5e40f5` · 2026-09-29T21:20:30+00:00*
+
+| Quantity | Measured | Datasheet | Measured / datasheet |
+|---|---|---|---|
+| Memory bandwidth, read (GB/s) | 262 | 300 | 87% |
+| Memory bandwidth, copy (GB/s) | 231 | 300 | 77% |
+| BF16 matmul peak (TFLOP/s) | 57.0 | 121 | 47% |
+| FP16 matmul peak (TFLOP/s) | 56.6 | 121 | 47% |
+| FP8 matmul peak (TFLOP/s) | 117.8 | 242 | 49% |
+| INT8 matmul peak (TOPS) | 128.1 | 242 | 53% |
+| BF16 ridge point (FLOPs/byte) | 217 | 403 | — |
+| FP8 ridge point (FLOPs/byte) | 449 | 807 | — |
+| Kernel launch, eager (µs per kernel) | 8.72 | — | — |
+| Kernel launch, CUDA graph (µs per kernel) | 0.95 | — | — |
+| Power, idle (W) | 30 | — | — |
+| Power, streaming memory (W) | 63 | — | — |
+| Power, BF16 matmul (W) | 71 | 72 | 99% |
+| SM clock, sustained BF16 matmul (MHz) | 1,009 | 2,040 | 49% |
+| BF16 datasheet peak at that clock (TFLOP/s) | 59.8 | 121 | 49% |
+| Temperature start → end (°C) | 61 → 68 | — | — |
 <!-- END GENERATED: hw_summary -->
 
 ![Memory bandwidth vs transfer size](../../results/figures/hw_bandwidth_vs_size.png)
 <!-- BEGIN GENERATED: caption-hw_bandwidth_vs_size -->
+*Large reads reach 262 GB/s, 87% of the 300 GB/s datasheet figure; transfers that fit in L2 peak at 1365 GB/s (cache, not memory).*
 <!-- END GENERATED: caption-hw_bandwidth_vs_size -->
 
 ![Roofline](../../results/figures/hw_roofline.png)
 <!-- BEGIN GENERATED: caption-hw_roofline -->
+*Measured BF16 ridge point: 217 FLOPs/byte (FP8: 449); an M=1 matmul (decode at batch 1) sits at 1.0 FLOPs/byte and reaches 0.2% of the measured peak.*
 <!-- END GENERATED: caption-hw_roofline -->
 
 ![Matmul efficiency](../../results/figures/hw_matmul_efficiency.png)
 <!-- BEGIN GENERATED: caption-hw_matmul_efficiency -->
+*BF16 reaches 47% of datasheet peak at M=8192 but only 0.1% at M=1: decode-sized matmuls can't fill the GPU.*
 <!-- END GENERATED: caption-hw_matmul_efficiency -->
 
-**Prediction vs measurement:** *(written after the first run)*
+### Prediction vs measurement
+
+<!-- BEGIN GENERATED: m0_predictions -->
+*Predictions written in commit `82f62cc`, before the first measurement.*
+
+| Quantity | Predicted | Measured | Verdict |
+|---|---|---|---|
+| Read bandwidth, transfers >= 4x L2 (GB/s) | 250 – 275 | 262 | within range |
+| Copy bandwidth, transfers >= 4x L2 (GB/s) | 230 – 265 | 231 | within range |
+| Best 1-32 MiB transfer vs memory bandwidth (x) | 1.5 – 3 | 5.2 | above range |
+| 4 KiB transfer (GB/s) | 0 – 10 | 0.348 | within range |
+| BF16 matmul peak (TFLOP/s) | 75 – 100 | 57 | below range |
+| FP8 peak / BF16 peak (x) | 1.6 – 1.9 | 2.07 | above range |
+| BF16 M=1, N=K=4096 (% of datasheet peak) | ~0.2 | 0.144 | 0.72× the prediction |
+| BF16 ridge point (FLOPs/byte) | ~330 | 217 | 0.66× the prediction |
+| Kernel launch, eager (us per kernel) | 4 – 10 | 8.72 | within range |
+| Kernel launch, CUDA graph (us per kernel) | 1 – 3 | 0.945 | below range |
+| Power, idle (W) | 15 – 25 | 30 | above range |
+| Power, streaming memory (W) | 40 – 60 | 63.4 | above range |
+| Power, BF16 matmul (W) | ~70 | 70.9 | 1× the prediction |
+<!-- END GENERATED: m0_predictions -->
+
+**Explaining every gap:**
+
+1. **Memory bandwidth landed in range.** Reads beat copies because a copy keeps switching the memory bus between
+   reading and writing, and every switch costs time. Pure streaming reads avoid that.
+2. **The L2 cache is much faster than I guessed** (above range). Copies of 16 MiB or less keep both source and
+   destination inside the 48 MiB L2 from one iteration to the next, so they never touch memory. *Lesson: any
+   benchmark that reuses small buffers measures the cache.* The first probe run fell into exactly this trap with
+   matmuls (see "Dead end" below).
+3. **BF16 peak below range: the L4 is power-limited.** This is the biggest lesson of M0.
+   - Under sustained tensor-core math the GPU hits its 72 W cap and roughly **halves its SM clock** (row "SM clock,
+     sustained BF16 matmul").
+   - The datasheet's 121 TFLOP/s assumes the maximum clock. Scaled to the sustained clock (row "BF16 datasheet peak
+     at that clock"), the measured peak is within a few percent of what the hardware can actually deliver.
+   - cuBLAS isn't inefficient; the power budget is the ceiling.
+4. **The ridge point is well below the datasheet's** (a direct consequence of 3). With a lower compute ceiling and
+   near-datasheet bandwidth, the GPU turns compute-bound at a *smaller* arithmetic intensity, i.e. at a smaller
+   batch size than the datasheet suggests. That matters for the batch-size crossover in M4.
+5. **FP8 delivered its full 2× over BF16** (above my range). I expected extra losses from scaling and power, and
+   they didn't show up. *Open question:* the clock wasn't sampled during FP8 matmuls, so the probe should add it.
+6. **Batch-1 matmuls are slower than "weights ÷ bandwidth"** (below my point estimate). The prediction assumed an
+   M=1 matmul streams its weight at full memory bandwidth. It doesn't. The smaller the weight, the further below it
+   falls, because a small matmul can't keep enough memory requests in flight to fill the bus, and fixed start-up
+   costs weigh more:
+
+<!-- BEGIN GENERATED: m0_decode_matmuls -->
+| Weight (N × K) | Size (MiB) | Time (µs) | Streamed at (GB/s) | vs measured read bandwidth |
+|---|---|---|---|---|
+| 1024 × 1024 | 2 | 18 | 114 | 43% |
+| 2048 × 2048 | 8 | 56 | 149 | 57% |
+| 4096 × 4096 | 32 | 193 | 174 | 66% |
+| 8192 × 8192 | 128 | 663 | 203 | 77% |
+<!-- END GENERATED: m0_decode_matmuls -->
+
+   **Consequence for M1:** Qwen3-0.6B's weight matrices are small (a few MiB each; only the LM head is large).
+   The batch-1 decode prediction must use these per-matmul streaming rates, not the best-case bandwidth, and it will
+   come out well below the naive "model size ÷ bandwidth" ceiling.
+7. **CUDA-graph replay beat my range; eager launches landed inside it.** Replaying a graph costs under a
+   microsecond per kernel, roughly an order of magnitude less than launching eagerly from Python. That gap is the
+   size of lever 3 on this setup.
+8. **Idle and streaming power were above range.** "Idle" here means *a process holding a CUDA context*. The GPU
+   stays in its top performance state with the SM clock near maximum even while doing nothing. Streaming memory also
+   runs at maximum clock. Memory-bound work isn't cheap in watts on this GPU.
+
+### Dead end (kept on purpose)
+
+The first full probe run (`8088e303e4bc`, still in `results/raw/hw_probe.jsonl`) timed matmuls **with a warm
+cache**. Its BF16 M=1, N=K=4096 result implied the 32 MiB weight was streaming at nearly **three times** the
+measured memory bandwidth, which is impossible from memory. The weight simply stayed in the 48 MiB L2 between
+iterations. The fix: `cuda_time_ms(..., flush_l2_bytes=...)` overwrites a scratch buffer twice the size of L2 before
+every timed run, outside the timed region. A GPU test now asserts that a cold M=1 matmul can never stream faster
+than the datasheet bandwidth. The same run also sampled "idle" power right after heavy work, so it read high; idle
+is now measured first.
 
 ## 6. Check your understanding
 
