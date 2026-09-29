@@ -7,6 +7,7 @@ From the repo root (the laptop's venv holds only `modal` and `ruff`):
     uv run --only-group local modal run infra/modal_app.py::probe       # M0 hardware probe -> results/raw/
     uv run --only-group local modal run infra/modal_app.py::figures     # figures -> results/figures/
     uv run --only-group local modal run infra/modal_app.py::fetch       # download model weights (once)
+    uv run --only-group local modal run infra/modal_app.py::m1          # M1 nanoserve measurements
 
 The container image is built in the cloud from pyproject.toml + uv.lock and cached after the first build.
 Every function has a timeout, so a hung job can never eat the month's free credit.
@@ -14,6 +15,7 @@ Every function has a timeout, so a hung job can never eat the month's free credi
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -62,9 +64,9 @@ def pytest_gpu(args: list[str]) -> int:
 @app.function(cpu=2, memory=4096, timeout=20 * 60, volumes={CACHE: hf_cache})
 def download_model(repo_id: str) -> str:
     """Download config, tokenizer and safetensors weights into the Volume (skipped if already there)."""
-    from huggingface_hub import snapshot_download
+    from fastserve.engine.loader import model_dir
 
-    path = snapshot_download(repo_id, allow_patterns=["*.json", "*.safetensors", "*.txt", "tokenizer*"])
+    path = model_dir(repo_id, download=True)
     hf_cache.commit()  # make the files visible to other containers
     return path
 
@@ -77,6 +79,19 @@ def hw_probe(config_text: str, config_path: str, git: dict) -> list[dict]:
     from fastserve.results import to_plain
 
     return to_plain(run_probe(yaml.safe_load(config_text), git=git, config_path=config_path))
+
+
+@app.function(gpu=GPU, cpu=4, memory=32768, timeout=40 * 60, volumes={CACHE: hf_cache})
+def m1_run(config_path: str, git: dict) -> list[dict]:
+    import yaml
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.experiments.m1 import run_m1
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    prompts = json.loads(Path(REMOTE, config["prompts"]).read_text(encoding="utf-8"))
+    return to_plain(run_m1(config, prompts, model_dir(config["model"]), git=git, config_path=config_path))
 
 
 @app.function(cpu=2, memory=4096, timeout=10 * 60)
@@ -115,6 +130,18 @@ def probe(config: str = "benchmarks/configs/hw_probe.yaml") -> None:
         print("warning: uncommitted changes; these results will be flagged as dirty")
     records = hw_probe.remote((REPO / config).read_text(encoding="utf-8"), config, git)
     out = REPO / "results" / "raw" / "hw_probe.jsonl"
+    print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
+
+
+@app.local_entrypoint()
+def m1(config: str = "benchmarks/configs/m1_nanoserve.yaml") -> None:
+    from fastserve.results import append_jsonl, git_info
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    records = m1_run.remote(config, git)
+    out = REPO / "results" / "raw" / "m1_nanoserve.jsonl"
     print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
 
 
