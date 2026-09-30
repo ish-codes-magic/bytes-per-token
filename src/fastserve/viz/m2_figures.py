@@ -210,3 +210,51 @@ def make_all(records: Records, out_dir: str | Path) -> list[Path]:
         fig, caption = build(records)
         written += save_figure(fig, name, caption, out_dir)
     return written
+
+
+def needle_heatmaps(quality_records: Records) -> tuple[plt.Figure, str]:
+    from fastserve.report.m2 import quality_by_model
+
+    q = quality_by_model(quality_records)
+    models = [m for m in (SMALL, LARGE) if "needle_cells" in q.get(m, {})]
+    fig, axes = plt.subplots(1, len(models), figsize=(5 * len(models) + 1, 4), squeeze=False)
+    worst = (100.0, "")
+    for ax, model in zip(axes[0], models, strict=True):
+        cells = q[model]["needle_cells"]
+        lengths = sorted({c["length"] for c in cells})
+        depths = sorted({c["depth"] for c in cells})
+        grid = np.zeros((len(depths), len(lengths)))
+        counts = np.zeros_like(grid)
+        for c in cells:
+            i, j = depths.index(c["depth"]), lengths.index(c["length"])
+            grid[i, j] += c["passed"]
+            counts[i, j] += 1
+        rate = grid / np.maximum(counts, 1)
+        ax.imshow(rate, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+        for (i, j), passed_count in np.ndenumerate(grid):
+            ax.text(
+                j,
+                i,
+                f"{int(passed_count)}/{int(counts[i, j])}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="black" if rate[i, j] > 0.6 else "white",
+            )
+        ax.set_xticks(range(len(lengths)), [f"{n // 1024}k" if n >= 1024 else str(n) for n in lengths])
+        ax.set_yticks(range(len(depths)), [f"{d:.0%}" for d in depths])
+        ax.set(xlabel="context length (tokens)", ylabel="needle depth", title=model.split("/")[-1])
+        ax.grid(False)
+        worst = min(worst, (q[model]["needle"], model.split("/")[-1]))
+    fig.suptitle("Needle in a haystack (BF16): passed / tried", fontweight="bold")
+    caption = (
+        f"In BF16 the weaker model ({worst[1]}) retrieves the needle in {worst[0]:.0f}% of cells "
+        "up to 32k tokens: the bar KV-cache compression must not lower."
+    )
+    return fig, caption
+
+
+def make_quality(quality_records: Records, out_dir: str | Path) -> list[Path]:
+    apply_style()
+    fig, caption = needle_heatmaps(quality_records)
+    return save_figure(fig, "m2_needle", caption, out_dir)

@@ -152,3 +152,60 @@ def long_context_table(records: Records) -> str:
                 prompt = "~100 (chat)" if workload == "chat" else workload.removeprefix("long_")
                 rows.append([model.split("/")[-1], prompt, _fmt(_p(s, "ttft_ms")), _fmt(_p(s, "tpot_ms"), 2)])
     return markdown_table(["Model", "Prompt tokens", "TTFT p50 (ms)", "TPOT p50 (ms)"], rows)
+
+
+# -- quality baselines ----------------------------------------------------------------------------
+
+
+def quality_by_model(records: Records) -> dict[str, dict[str, Any]]:
+    """{model: {"perplexity", "needle" (pass %), "needle_cells", "gsm8k", "mmlu", "humaneval" (%)}}."""
+    out: dict[str, dict[str, Any]] = {}
+    for m in metrics_of(records, "quality_perplexity"):
+        out.setdefault(m["model"], {})["perplexity"] = m["perplexity_ref"]
+    for m in metrics_of(records, "quality_needle"):
+        entry = out.setdefault(m["model"], {})
+        entry["needle"], entry["needle_cells"] = 100 * m["pass_rate"], m["cells"]
+    for m in metrics_of(records, "quality_tasks"):
+        for task, score in m["scores"].items():
+            value = score.get("score")
+            out.setdefault(m["model"], {})[task] = None if value is None else 100 * value
+    return out
+
+
+def quality_observables(records: Records) -> dict[str, float | None]:
+    q = quality_by_model(records)
+    small, large = q.get(SMALL, {}), q.get(LARGE, {})
+    obs = {}
+    for key, field in (
+        ("ppl", "perplexity"),
+        ("gsm8k", "gsm8k"),
+        ("mmlu", "mmlu"),
+        ("humaneval", "humaneval"),
+        ("needle", "needle"),
+    ):
+        obs[f"{key}_small"], obs[f"{key}_large"] = small.get(field), large.get(field)
+    return obs
+
+
+def quality_table(records: Records) -> str:
+    rows = []
+    for model, q in quality_by_model(records).items():
+        rows.append(
+            [
+                model.split("/")[-1],
+                _fmt(q.get("perplexity"), 2),
+                _fmt(q.get("gsm8k"), 1),
+                _fmt(q.get("mmlu"), 1),
+                _fmt(q.get("humaneval"), 1),
+                _fmt(q.get("needle"), 0),
+            ]
+        )
+    headers = [
+        "Model",
+        "WikiText-2 perplexity",
+        "GSM8K (%)",
+        "MMLU (%)",
+        "HumanEval pass@1 (%)",
+        "Needle (%)",
+    ]
+    return markdown_table(headers, sorted(rows))
