@@ -235,6 +235,17 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             written = m2_figures.make_all(raw["m2"], tmp)
             if raw.get("m2q"):
                 written += m2_figures.make_quality(raw["m2q"], tmp)
+            if raw.get("m2sat"):
+                from fastserve.hw.analysis import measured_bandwidth
+
+                configs = {
+                    model: ModelConfig.from_pretrained_json(
+                        Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
+                    )
+                    for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")
+                }
+                bandwidth = measured_bandwidth(raw["hw"])
+                written += m2_figures.make_saturation(raw["m2sat"], configs, bandwidth, tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -363,7 +374,12 @@ def figures(milestone: str = "all") -> None:
     raw_dir = REPO / "results" / "raw"
     raw = {
         key: latest_run(read_jsonl(raw_dir / file))
-        for key, file in (("hw", "hw_probe.jsonl"), ("m1", "m1_nanoserve.jsonl"), ("m2", "m2_serving.jsonl"))
+        for key, file in (
+            ("hw", "hw_probe.jsonl"),
+            ("m1", "m1_nanoserve.jsonl"),
+            ("m2", "m2_serving.jsonl"),
+            ("m2sat", "m2_saturation.jsonl"),
+        )
         if (raw_dir / file).exists()
     }
     quality = raw_dir / "m2_quality.jsonl"
