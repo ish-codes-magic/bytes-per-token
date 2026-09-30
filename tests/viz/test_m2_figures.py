@@ -27,3 +27,4 @@ def test_saturation_figure_caption_reads_the_plateau(m2_saturation_records, tmp_
     assert tmp_path / "m2_saturation.png" in written
     caption = (tmp_path / "m2_saturation.caption.txt").read_text(encoding="utf-8")
     assert "Held full for 8 s" in caption and "4,000 tokens/s with 200 sequences" in caption
+    assert "once the queue drains" in caption

@@ -268,12 +268,18 @@ def make_quality(quality_records: Records, out_dir: str | Path) -> list[Path]:
 
 def saturation(records: Records, configs: dict[str, Any], bandwidth: float) -> tuple[plt.Figure, str]:
     """The engine held full, seen through its own counters, vs the memory-bound ceiling at each moment."""
-    from fastserve.hw.analysis import metrics_of
-    from fastserve.report.m2 import memory_bound_step_s, saturation_run
+    from fastserve.report.m2 import (
+        drained,
+        kv_capacity,
+        memory_bound_step_s,
+        memory_efficiency,
+        plateau,
+        saturation_run,
+    )
 
     m, p = saturation_run(records, SMALL, "saturation")
     cfg = configs[SMALL]
-    capacity = next(s for s in metrics_of(records, "server_start") if s["model"] == SMALL)["kv_cache_tokens"]
+    capacity = kv_capacity(records, SMALL)
     table = m["server_timeline"]
     keys = ("t", "running", "waiting", "kv_usage", "generation_tokens")
     idx = [table["columns"].index(k) for k in keys]
@@ -302,13 +308,17 @@ def saturation(records: Records, configs: dict[str, Any], bandwidth: float) -> t
     handles = bottom.get_legend_handles_labels()[0] + kv_axis.get_legend_handles_labels()[0]
     bottom.legend(handles=handles, loc="center right", fontsize=8)
 
-    kv_tokens = p["kv_usage"] * capacity
-    share = p["output_tok_s"] / (p["running"] / memory_bound_step_s(kv_tokens, cfg, bandwidth))
     caption = (
         f"Held full for {p['seconds']:.0f} s, Qwen3-0.6B decodes {p['output_tok_s']:,.0f} tokens/s with "
-        f"{p['running']:.0f} sequences running: {share:.0%} of the memory-bound ceiling "
-        "set by its live KV cache."
+        f"{p['running']:.0f} sequences running, at {memory_efficiency(p, capacity, cfg, bandwidth):.0%} of "
+        "the memory-bound ceiling"
     )
+    if drain := plateau(m, drained):
+        caption += (
+            f"; once the queue drains and no new prompts arrive, steps run at "
+            f"{memory_efficiency(drain, capacity, cfg, bandwidth):.0%} of it"
+        )
+    caption += "."
     return fig, caption
 
 
