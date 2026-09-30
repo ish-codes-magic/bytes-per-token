@@ -89,7 +89,7 @@ def gptq_quantize(
     # Grids fixed before any update: per-tensor and per-channel always; per-group only with static_groups.
     fixed_grid = None
     if spec.granularity != "group" or cfg.static_groups:
-        fixed_grid = scale_and_zero(grouped(W, spec), spec.bits, spec.symmetric)  # each [rows|1, n, 1]
+        fixed_grid = scale_and_zero(grouped(W, spec), spec.bits, spec.symmetric, spec.full_range)
 
     perm = torch.argsort(torch.diag(H), descending=True) if cfg.act_order else torch.arange(cols)
     W, H = W[:, perm], H[perm][:, perm]
@@ -117,7 +117,9 @@ def gptq_quantize(
                 else:
                     grid = scale[0, 0].expand(rows, 1), zero[0, 0].expand(rows, 1)
             elif col % spec.group_size == 0:  # a new group starts: its grid from the *updated* weights
-                grid = scale_and_zero(W1[:, i : i + spec.group_size], spec.bits, spec.symmetric)
+                grid = scale_and_zero(
+                    W1[:, i : i + spec.group_size], spec.bits, spec.symmetric, spec.full_range
+                )
             q = round_to_grid(W1[:, i : i + 1], *grid, spec.bits, spec.symmetric)[:, 0]  # [out]
             Q[:, col] = q
             error = W1[:, i] - q  # [out]: what rounding this column costs each row

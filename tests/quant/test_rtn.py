@@ -15,6 +15,19 @@ def test_known_values_int4_symmetric():
     assert w_hat.tolist()[0] == pytest.approx([7 * s, -2 * s, 0.0, -5 * s], abs=1e-6)
 
 
+def test_full_range_uses_all_16_codes_with_a_finer_step():
+    x = torch.tensor([[0.75, -0.75, 0.1, 0.0]])
+    full = fake_quantize(x, IntSpec(4, "tensor", full_range=True))
+    s = 0.75 / 7.5  # compressed-tensors' symmetric scale
+    # ±7.5 both round half-to-even to ±8: the negative end fits (−8), the positive end is clipped to 7
+    assert full.tolist()[0] == pytest.approx([7 * s, -8 * s, 1 * s, 0.0])
+    w = torch.randn(64, 256, generator=torch.Generator().manual_seed(3))
+    spec = IntSpec(4, "group", 32)
+    finer = IntSpec(4, "group", 32, full_range=True)
+    assert (fake_quantize(w, finer) - w).pow(2).mean() < (fake_quantize(w, spec) - w).pow(2).mean()
+    assert finer.label == "INT4 g32 sym, full range"
+
+
 def test_symmetric_error_is_at_most_half_a_step():
     w = torch.randn(64, 256, generator=torch.Generator().manual_seed(0))
     spec = IntSpec(bits=4, granularity="group", group_size=32)

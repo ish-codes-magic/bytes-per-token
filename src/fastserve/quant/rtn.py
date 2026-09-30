@@ -7,7 +7,11 @@ zero-point), and every weight snaps to the nearest point of its group's grid:
     asymmetric   s = (max − min) / (2^b − 1)      q = clamp(round(w / s) + z, 0, 2^b − 1)        ŵ = s·(q − z)
                  z = round(−min / s)              (the integer that stands for a real 0)
 
-with qmax = 2^(b−1) − 1 (7 for INT4). Granularity decides how many weights share one scale:
+with qmax = 2^(b−1) − 1 (7 for INT4). That symmetric grid is the textbook one: 15 levels, and the code −8 goes
+unused. Libraries such as compressed-tensors (llm-compressor) use all 16 codes: s = max|w| / 7.5, levels −8…7.
+The step is 7% finer, and the largest positive weight is clipped by half a step (`full_range=True`).
+
+Granularity decides how many weights share one scale:
 
     per-tensor   all of W                         one scale: an outlier anywhere hurts everything
     per-channel  one output row                   the standard for INT8
@@ -34,6 +38,7 @@ class IntSpec:
     granularity: str = "group"  # "tensor" | "channel" | "group"
     group_size: int = 128
     symmetric: bool = True
+    full_range: bool = False  # symmetric only: s = max|w| / (2^b − 1)/2, using every code
 
     def __post_init__(self) -> None:
         if self.granularity not in GRANULARITIES:
@@ -53,7 +58,8 @@ class IntSpec:
     @property
     def label(self) -> str:
         size = {"tensor": "per-tensor", "channel": "per-channel", "group": f"g{self.group_size}"}
-        return f"INT{self.bits} {size[self.granularity]} {'sym' if self.symmetric else 'asym'}"
+        kind = ("sym, full range" if self.full_range else "sym") if self.symmetric else "asym"
+        return f"INT{self.bits} {size[self.granularity]} {kind}"
 
 
 def grouped(w: torch.Tensor, spec: IntSpec) -> torch.Tensor:
@@ -68,11 +74,14 @@ def grouped(w: torch.Tensor, spec: IntSpec) -> torch.Tensor:
     return w.reshape(rows, cols // spec.group_size, spec.group_size)  # [rows, n_groups, group]
 
 
-def scale_and_zero(x: torch.Tensor, bits: int, symmetric: bool) -> tuple[torch.Tensor, torch.Tensor]:
+def scale_and_zero(
+    x: torch.Tensor, bits: int, symmetric: bool, full_range: bool = False
+) -> tuple[torch.Tensor, torch.Tensor]:
     """The grid for the values in x's last dimension: (scale, zero-point), each shaped [..., 1]."""
     x = x.float()
     if symmetric:
-        scale = x.abs().amax(dim=-1, keepdim=True) / (2 ** (bits - 1) - 1)
+        levels = (2**bits - 1) / 2 if full_range else 2 ** (bits - 1) - 1  # 7.5 or 7 for INT4
+        scale = x.abs().amax(dim=-1, keepdim=True) / levels
         zero = torch.zeros_like(scale)
     else:
         # Stretch the range to include 0, so a real 0 (e.g. padding, pruned weights) stays exactly 0.
@@ -98,7 +107,7 @@ def round_to_grid(
 def quantize(w: torch.Tensor, spec: IntSpec) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """The integer codes and grid of W: (q [rows, n_scales, weights_per_scale], scale, zero)."""
     x = grouped(w.float(), spec)
-    scale, zero = scale_and_zero(x, spec.bits, spec.symmetric)
+    scale, zero = scale_and_zero(x, spec.bits, spec.symmetric, spec.full_range)
     if spec.symmetric:
         qmax = 2 ** (spec.bits - 1) - 1
         return torch.clamp(torch.round(x / scale), -qmax - 1, qmax), scale, zero
@@ -108,5 +117,5 @@ def quantize(w: torch.Tensor, spec: IntSpec) -> tuple[torch.Tensor, torch.Tensor
 def fake_quantize(w: torch.Tensor, spec: IntSpec) -> torch.Tensor:
     """RTN-quantize W and dequantize it again: same shape and dtype, values on the grid."""
     x = grouped(w.float(), spec)
-    scale, zero = scale_and_zero(x, spec.bits, spec.symmetric)
+    scale, zero = scale_and_zero(x, spec.bits, spec.symmetric, spec.full_range)
     return round_to_grid(x, scale, zero, spec.bits, spec.symmetric).reshape(w.shape).to(w.dtype)
