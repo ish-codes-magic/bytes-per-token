@@ -252,9 +252,20 @@ def test_gpu(args: str = "-q -m gpu") -> None:
         raise SystemExit(code)
 
 
+@app.function(cpu=1, memory=1024, timeout=5 * 60, volumes={CACHE: hf_cache})
+def read_model_config(repo_id: str) -> str:
+    from fastserve.engine.loader import model_dir
+
+    return Path(model_dir(repo_id), "config.json").read_text(encoding="utf-8")
+
+
 @app.local_entrypoint()
 def fetch(model: str = DEFAULT_MODEL) -> None:
+    """Download a model into the Volume, and save its config.json under benchmarks/models/ (it's small)."""
     print(f"{model} is at {download_model.remote(model)} on the {hf_cache.name or 'cache'} volume")
+    out = REPO / "benchmarks" / "models" / f"{model.split('/')[-1]}.config.json"
+    out.write_text(read_model_config.remote(model), encoding="utf-8", newline="\n")
+    print(f"saved {out.relative_to(REPO)}")
 
 
 @app.local_entrypoint()
