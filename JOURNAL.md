@@ -79,3 +79,14 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   - A unit test corrected my intuition: at batch 64 × 128 tokens, Qwen3-0.6B's KV cache (~0.94 GB) is nearly as
     big as its weights, so decode intensity is well below "≈ batch size".
 - **Gate M1 approved** (questions deferred by the owner). Tagged `v0.1-nanoserve`.
+
+## 2026-10-01
+
+- **M2 environment:** vLLM 0.30.0 pins PyTorch 2.13.0 (the research image has 2.14.0), so vLLM gets its own image
+  and lock (`infra/serving.lock`) instead of changing the environment M0/M1 were measured in.
+- **Dead end: slim base image.** vLLM loaded the model, compiled, captured CUDA graphs and sized the KV cache
+  (172,640 tokens, close to the ~178k estimated in PROJECT.md Ch 4), then died in warm-up. FlashInfer compiles
+  its top-k/top-p sampling kernel on first use and needs `nvcc`, which `debian_slim` lacks. Fix: build the serving
+  image on `nvidia/cuda:13.0.1-devel-ubuntu24.04`.
+- **Startup is slow (224 s):** the likely cause is FlashInfer recompiling every container start. Its cache now
+  lives on the Volume (`FLASHINFER_WORKSPACE_BASE`), next to vLLM's compile cache (`VLLM_CACHE_ROOT`).
