@@ -18,15 +18,26 @@ from fastserve.serving.server import VLLMServer
 from fastserve.serving.server_metrics import sample_server
 from fastserve.serving.workloads import RequestSpec, Workload
 
-# Settings vLLM chooses at startup and prints: how many tokens of KV cache fit after loading the weights.
+# What vLLM decides at startup and prints:
+# - how many tokens of KV cache fit, and how much memory the weights and the KV cache take
+# - which kernel it picked for each quantized layer type
 # (Its per-step token budget isn't in the 0.30 log; the server timeline measures it instead.)
-_FROM_LOG = {"kv_cache_tokens": re.compile(r"GPU KV cache size: ([\d,]+) tokens")}
+_FROM_LOG = {
+    "kv_cache_tokens": (re.compile(r"GPU KV cache size: ([\d,]+) tokens"), int),
+    "model_memory_gib": (re.compile(r"Model loading took ([\d.]+) ?GiB"), float),
+    "kv_cache_memory_gib": (re.compile(r"Available KV cache memory: ([\d.]+) ?GiB"), float),
+}
+_KERNEL = re.compile(r"(Using \S*Kernel\S* for \S+|Selected \S*Kernel\S* for \S+)")
 
 
-def _from_log(server: VLLMServer) -> dict[str, int | None]:
+def _from_log(server: VLLMServer) -> dict[str, Any]:
     log = server.log_path.read_text(errors="replace")
-    found = {key: pattern.search(log) for key, pattern in _FROM_LOG.items()}
-    return {key: int(m.group(1).replace(",", "")) if m else None for key, m in found.items()}
+    found: dict[str, Any] = {}
+    for key, (pattern, cast) in _FROM_LOG.items():
+        match = pattern.search(log)
+        found[key] = cast(match.group(1).replace(",", "")) if match else None
+    found["kernels"] = sorted(set(_KERNEL.findall(log)))
+    return found
 
 
 async def _monitored(
@@ -50,8 +61,18 @@ def _warm_up(server: VLLMServer, model: str) -> None:
 
 
 def run_serving(
-    config: dict[str, Any], workloads: dict[str, Any], *, git: dict | None, config_path: str
+    config: dict[str, Any],
+    workloads: dict[str, Any],
+    *,
+    git: dict | None,
+    config_path: str,
+    only: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Every server in the config (or just those whose `name` is in `only`), every workload, every load point.
+
+    A server entry may give `path` (a local checkpoint, e.g. a quantized one); otherwise the model comes from
+    the Hugging Face cache.
+    """
     run_id, env, seed = new_run_id(), environment_info(), config["seed"]
     slo = config["slo"]
     records: list[dict[str, Any]] = []
@@ -64,8 +85,11 @@ def run_serving(
         )
 
     for server_cfg in config["servers"]:
+        if only is not None and server_cfg.get("name", server_cfg["label"]) not in only:
+            continue
         model, label, args = server_cfg["model"], server_cfg["label"], server_cfg.get("args", [])
-        with VLLMServer(model_dir(model), served_name=model, extra_args=args) as server:
+        path = server_cfg.get("path") or model_dir(model)
+        with VLLMServer(path, served_name=model, extra_args=args) as server:
             add(
                 "server_start",
                 {
