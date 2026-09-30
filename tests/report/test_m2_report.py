@@ -136,3 +136,17 @@ def test_prefill_budget_predicts_the_batch_with_littles_law(m2_saturation_record
     table = prefill_budget_table(m2_saturation_records)
     # a 100 ms step carries 1,988 prompt + 60 output tokens: R = B·O / (P + O) = 2048 × 64 / 2176 ≈ 60
     assert "| Qwen3-0.6B | 2,048 | 2,112 + 64 | 60 | 60 | 100 | 9.4 |" in table
+
+
+def test_repeat_table_pairs_identical_load_points(m2_records):
+    import copy
+
+    from fastserve.report.m2 import repeat_table
+
+    again = copy.deepcopy(m2_records)
+    for r in again:
+        if r["experiment"] == "serving" and r["metrics"]["workload"] == "shared_prefix":
+            r["metrics"]["summary"]["output_throughput"] *= 1.1
+    table = repeat_table(m2_records, [r for r in again if r["metrics"].get("workload") == "shared_prefix"])
+    assert table.count("| shared_prefix, 16 req/s |") == 2  # one row per model, nothing else matched
+    assert "| 900 / 990 |" in table and table.rstrip().endswith("| 10% |")

@@ -36,6 +36,7 @@ from fastserve.report.m2 import (  # noqa: E402
     prefill_efficiency_table,
     quality_observables,
     quality_table,
+    repeat_table,
     saturation_table,
     summary_table,
 )
@@ -101,6 +102,7 @@ def build_blocks() -> dict[str, str]:
             blocks["m2_saturation"] = saturation_table(sat, configs, bandwidth)
             blocks["m2_decode_efficiency"] = decode_efficiency_table(m2, sat, configs, bandwidth)
             blocks["m2_prefill_budget"] = prefill_budget_table(sat)
+            blocks["m2_repeat"] = repeat_table(m2, sat)
         offline = REPO / "results" / "raw" / "m2_offline.jsonl"
         if offline.exists():
             blocks["m2_offline"] = offline_table(newest_per_model(read_jsonl(offline)), m2)

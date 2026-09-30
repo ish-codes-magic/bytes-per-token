@@ -566,3 +566,36 @@ def prefill_budget_table(saturation: Records) -> str:
         "Requests/s",
     ]
     return markdown_table(headers, rows)
+
+
+def repeat_table(first: Records, second: Records) -> str:
+    """The same load point measured in two independent runs (new container and server): how far apart?"""
+    rows = []
+    for a in metrics_of(first, "serving"):
+        for b in metrics_of(second, "serving"):
+            if (a["model"], a["workload"], a["load"]) != (b["model"], b["workload"], b["load"]):
+                continue
+            pairs = [
+                (a["summary"]["output_throughput"], b["summary"]["output_throughput"]),
+                (_p(a["summary"], "tpot_ms"), _p(b["summary"], "tpot_ms")),
+                (_p(a["summary"], "ttft_ms"), _p(b["summary"], "ttft_ms")),
+            ]
+            load = a["load"]
+            where = f"{load['rate']:g} req/s" if load["mode"] == "open" else f"{load['concurrency']} users"
+            rows.append(
+                [
+                    a["model"].split("/")[-1],
+                    f"{a['workload']}, {where}",
+                    *(f"{_fmt(x, 1 if x < 100 else 0)} / {_fmt(y, 1 if y < 100 else 0)}" for x, y in pairs),
+                    f"{max(abs(y - x) / x for x, y in pairs):.0%}",
+                ]
+            )
+    headers = [
+        "Model",
+        "Load point",
+        "Output tok/s: run 1 / run 2",
+        "TPOT p50 (ms)",
+        "TTFT p50 (ms)",
+        "Largest difference",
+    ]
+    return markdown_table(headers, rows)
