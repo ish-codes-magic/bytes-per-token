@@ -166,7 +166,8 @@ def serving_smoke(model: str) -> dict:
 
 
 @app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=120 * 60, volumes={CACHE: hf_cache})
-def m2_run(config_path: str, git: dict) -> list[dict]:
+def m2_run(config_path: str, git: dict, only: list[str] | None = None) -> list[dict]:
+    """Serving experiments from a config: every server, or only the named ones (one container each in M4)."""
     import yaml
 
     from fastserve.experiments.m2 import run_serving
@@ -174,7 +175,7 @@ def m2_run(config_path: str, git: dict) -> list[dict]:
 
     config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
     workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
-    records = run_serving(config, workloads, git=git, config_path=config_path)
+    records = run_serving(config, workloads, git=git, config_path=config_path, only=only)
     hf_cache.commit()  # keep vLLM/FlashInfer compile caches for the next run
     return to_plain(records)
 
@@ -286,8 +287,11 @@ def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
 
 
 @app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60)
-def quant_library_facts() -> str:
-    """The installed llm-compressor's defaults and grid formula, read before comparing against it."""
+def quant_library_facts(topic: str = "m3") -> str:
+    """What the installed llm-compressor does, read before relying on it (AGENTS.md §2.3).
+
+    "m3": GPTQ/AWQ defaults and the grid formula. "m4": the presets, SmoothQuant and the oneshot/save APIs.
+    """
     import importlib
     import inspect
     from importlib.metadata import version
@@ -296,6 +300,22 @@ def quant_library_facts() -> str:
     from compressed_tensors.quantization.utils import helpers
 
     lines = [f"llmcompressor {version('llmcompressor')}, compressed-tensors {version('compressed-tensors')}"]
+    if topic == "m4":
+        for preset in ("FP8_DYNAMIC", "W8A8", "W4A16"):
+            lines.append(f"{preset}: {preset_name_to_scheme(preset, ['Linear'])}")
+        for module in ("llmcompressor.modifiers.smoothquant", "llmcompressor.modifiers.transform"):
+            try:
+                names = [n for n in dir(importlib.import_module(module)) if "Modifier" in n]
+                lines.append(f"{module}: {names}")
+            except ImportError as err:
+                lines.append(f"{module}: {err}")
+        from llmcompressor import oneshot
+
+        lines.append(f"oneshot{inspect.signature(oneshot)}")
+        from llmcompressor.transformers.compression.compressed_tensors_utils import modify_save_pretrained
+
+        lines.append(inspect.getsource(modify_save_pretrained)[:3000])
+        return "\n".join(lines)
     for module, name in (
         ("llmcompressor.modifiers.gptq", "GPTQModifier"),
         ("llmcompressor.modifiers.transform", "AWQModifier"),
