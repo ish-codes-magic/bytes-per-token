@@ -15,8 +15,16 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package, only its stdlib-only modules
 
 from fastserve.engine.config import ModelConfig  # noqa: E402
-from fastserve.hw.analysis import m0_observables  # noqa: E402
+from fastserve.hw.analysis import m0_observables, metrics_of  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
+from fastserve.report.m2 import (  # noqa: E402
+    LARGE,
+    SMALL,
+    load_table,
+    long_context_table,
+    m2_observables,
+    summary_table,
+)
 from fastserve.report.render import render_file  # noqa: E402
 from fastserve.report.tables import (  # noqa: E402
     decode_matmul_table,
@@ -50,6 +58,19 @@ def build_blocks() -> dict[str, str]:
         blocks["m1_parity"] = parity_table(m1)
         blocks["m1_speed"] = speed_table(m1)
         blocks["m1_profile"] = profile_table(m1)
+    serving = REPO / "results" / "raw" / "m2_serving.jsonl"
+    if serving.exists() and nanoserve.exists():
+        m2 = latest_run(read_jsonl(serving))
+        b1 = next(m["tokens_per_s"] for m in metrics_of(m1, "decode_speed") if m["batch"] == 1)
+        predictions = json.loads(
+            (REPO / "benchmarks" / "predictions" / "m2.json").read_text(encoding="utf-8")
+        )
+        blocks["m2_predictions"] = prediction_table(predictions, m2_observables(m2, nanoserve_b1_tok_s=b1))
+        blocks["m2_summary"] = summary_table(m2)
+        blocks["m2_load_small"] = load_table(m2, SMALL)
+        blocks["m2_load_large"] = load_table(m2, LARGE)
+        blocks["m2_shared_prefix"] = load_table(m2, SMALL, "shared_prefix")
+        blocks["m2_long_context"] = long_context_table(m2)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

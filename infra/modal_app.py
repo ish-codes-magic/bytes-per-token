@@ -172,7 +172,7 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
     import tempfile
 
     from fastserve.engine.config import ModelConfig
-    from fastserve.viz import hw_figures, m1_figures
+    from fastserve.viz import hw_figures, m1_figures, m2_figures
 
     with tempfile.TemporaryDirectory() as tmp:
         if milestone == "m0":
@@ -183,6 +183,8 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
                 Path(REMOTE, "benchmarks", "models", f"{name}.config.json")
             )
             written = m1_figures.make_all(raw["m1"], raw["hw"], cfg, tmp)
+        elif milestone == "m2":
+            written = m2_figures.make_all(raw["m2"], tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -259,13 +261,13 @@ def figures(milestone: str = "all") -> None:
     raw_dir = REPO / "results" / "raw"
     raw = {
         key: latest_run(read_jsonl(raw_dir / file))
-        for key, file in (("hw", "hw_probe.jsonl"), ("m1", "m1_nanoserve.jsonl"))
+        for key, file in (("hw", "hw_probe.jsonl"), ("m1", "m1_nanoserve.jsonl"), ("m2", "m2_serving.jsonl"))
         if (raw_dir / file).exists()
     }
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1"] if milestone == "all" else [milestone]:
-        if ms == "m1" and "m1" not in raw:
+    for ms in ["m0", "m1", "m2"] if milestone == "all" else [milestone]:
+        if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():
             (out / name).write_bytes(data)
