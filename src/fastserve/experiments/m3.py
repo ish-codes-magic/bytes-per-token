@@ -44,7 +44,7 @@ from fastserve.quant.model import (
     smoothquant_model,
     w8a8_model,
 )
-from fastserve.quant.rotation import rotate_model
+from fastserve.quant.rotation import fold_all_norms, rotate_model
 from fastserve.quant.rtn import IntSpec, fake_quantize, grouped
 from fastserve.quant.w8a8 import W8A8Config
 
@@ -133,8 +133,14 @@ def build(bench: Bench, entry: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         model = from_state_dict(bench.config, state, device=bench.device, dtype=torch.bfloat16)
     else:
         model = copy.deepcopy(bench.ref)
+    if entry.get("dtype") == "float32":  # e.g. to separate rotation's effect from BF16 rounding
+        model = model.float()
+    if entry.get("rotate") or entry.get("fold"):
+        info["gamma_spread"] = gamma_spread(model)
     if entry.get("rotate"):
         rotate_model(model, seed=entry.get("rotation_seed", 0))
+    elif entry.get("fold"):
+        fold_all_norms(model)
     calib = bench.calibration(entry.get("calibration"), entry.get("samples")) if _needs_data(entry) else None
     if method == "rtn":
         spec = int_spec(entry)
@@ -177,6 +183,21 @@ def build(bench: Bench, entry: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         torch.cuda.synchronize()
     info["quantize_s"] = time.perf_counter() - start
     return model, info
+
+
+def gamma_spread(model: Any) -> dict[str, Any]:
+    """How uneven the RMSNorm weights are: folding a large γ into a linear makes an outlier column."""
+    norms = {"final": model.model.norm}
+    for i, layer in enumerate(model.model.layers):
+        norms[f"layers.{i}.input"] = layer.input_layernorm
+        norms[f"layers.{i}.post_attention"] = layer.post_attention_layernorm
+    spread = {name: (n.weight.abs().max() / n.weight.abs().median()).item() for name, n in norms.items()}
+    worst = max(spread, key=spread.get)
+    return {
+        "worst_norm": worst,
+        "max_over_median": spread[worst],
+        "typical_max_over_median": sorted(spread.values())[len(spread) // 2],
+    }
 
 
 def _needs_data(entry: dict[str, Any]) -> bool:

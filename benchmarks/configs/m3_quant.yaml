@@ -63,6 +63,13 @@ tasks:
     - {name: calib-math, method: gptq, bits: 4, full_range: true, calibration: math}
     - {name: calib-german, method: gptq, bits: 4, full_range: true, calibration: german}
 
+  rotation_diagnosis:                             # added after the first run, where rotation made RTN worse
+    - {name: fold-bf16, method: bf16, fold: true}                      # is folding γ exact? (it should be)
+    - {name: rot-bf16, method: bf16, rotate: true}                     # what does rotating in BF16 alone cost?
+    - {name: rot-bf16-fp32, method: bf16, rotate: true, dtype: float32}
+    - {name: fold-rtn-int4-g128, method: rtn, bits: 4, fold: true}     # does folding γ make the weights harder?
+    - {name: rot-rtn-int4-g128-fp32, method: rtn, bits: 4, rotate: true, dtype: float32}
+
   library_eval:                                   # llm-compressor's checkpoints, scored exactly like ours
     - {name: library-gptq-int4-g128, method: library, checkpoint: Qwen3-0.6B-gptq, bits: 4, full_range: true}
     - {name: library-awq-int4-g128, method: library, checkpoint: Qwen3-0.6B-awq, bits: 4, full_range: true}

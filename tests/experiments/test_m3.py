@@ -93,3 +93,10 @@ def test_analyses_run_and_report_what_the_figures_need(bench):
     assert len(trace["frames"]) == 8 and trace["loss_gptq"] <= trace["loss_rtn"]
     scan = sensitivity(bench, {"bits": 4, "group_size": G, "windows": 1})
     assert len(scan["cells"]) == 2 * 7 and all(c["kl"] >= 0 for c in scan["cells"])
+
+
+def test_folding_alone_and_float32_copies_preserve_the_model(bench):
+    folded = run_entry(bench, {"name": "fold", "method": "bf16", "fold": True})
+    assert folded["mean_kl"] < 1e-9 and folded["gamma_spread"]["max_over_median"] >= 1
+    rotated = run_entry(bench, {"name": "rot32", "method": "bf16", "rotate": True, "dtype": "float32"})
+    assert rotated["mean_kl"] < 1e-6  # float32 rounding only
