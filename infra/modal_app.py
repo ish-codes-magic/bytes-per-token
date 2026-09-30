@@ -365,12 +365,31 @@ def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
 
 
 @app.function(image=serving_image, cpu=2, memory=8192, timeout=15 * 60)
-def eval_library_facts() -> str:
-    """How the installed lm-evaluation-harness logs samples and scores GSM8K, read before relying on it."""
+def serving_library_facts(topic: str = "lm_eval") -> str:
+    """What the serving image's libraries do, read before relying on it (AGENTS.md §2.3).
+
+    "lm_eval": how samples are logged and GSM8K is scored. "w8a8": what vLLM runs around an FP8/INT8 matmul.
+    """
     import inspect
     import re
     from importlib.metadata import version
     from pathlib import Path
+
+    if topic == "w8a8":  # the kernels vLLM's startup log named for FP8 and INT8 W8A8
+        import vllm
+
+        lines = [f"vllm {version('vllm')}"]
+        names = ("CutlassFP8ScaledMMLinearKernel", "CutlassInt8ScaledMMLinearKernel")
+        for path in sorted(Path(vllm.__file__).parent.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for name in names:
+                at = text.find(f"class {name}")
+                if at >= 0:
+                    body = text[at:]
+                    apply = body.find("def apply_weights")
+                    lines.append(f"{path}: {name}")
+                    lines.append(body[apply : apply + 2500] if apply >= 0 else body[:2500])
+        return "\n".join(lines)
 
     import lm_eval
     import lm_eval.evaluator as evaluator
