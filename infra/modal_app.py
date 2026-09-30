@@ -189,6 +189,31 @@ def m2_quality_task(task: str, model: str, config_path: str, git: dict) -> list[
     return to_plain([record])
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m2_offline_run(model: str, config_path: str, git: dict) -> list[dict]:
+    """vLLM's engine alone on the throughput workload: separates engine capacity from serving overhead."""
+    import yaml
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.experiments.m2 import offline_throughput
+    from fastserve.results import environment_info, make_record, new_run_id, to_plain
+    from fastserve.serving.workloads import Workload
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
+    specs = Workload.from_config("throughput", workloads["throughput"]).requests()
+    metrics = {"model": model, "workload": "throughput", **offline_throughput(model_dir(model), specs)}
+    record = make_record(
+        "offline_throughput",
+        metrics,
+        run_id=new_run_id(),
+        config={"path": config_path, **config},
+        git=git,
+        env=environment_info(),
+    )
+    return to_plain([record])
+
+
 @app.function(cpu=2, memory=4096, timeout=10 * 60)
 def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, bytes]:
     """Draw one milestone's figures from its raw records; returns {file name: bytes}."""
@@ -275,6 +300,21 @@ def m2(config: str = "benchmarks/configs/m2_baseline.yaml") -> None:
     records = m2_run.remote(config, git)
     out = REPO / "results" / "raw" / "m2_serving.jsonl"
     print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
+
+
+@app.local_entrypoint()
+def m2offline(config: str = "benchmarks/configs/m2_baseline.yaml") -> None:
+    from fastserve.results import append_jsonl, git_info
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    out = REPO / "results" / "raw" / "m2_offline.jsonl"
+    calls = [m2_offline_run.spawn(model, config, git) for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")]
+    for call in calls:
+        records = call.get()
+        m = records[0]["metrics"]
+        print(f"wrote {append_jsonl(out, records)}: {m['model']} {m['output_throughput']:,.0f} tok/s offline")
 
 
 @app.local_entrypoint()

@@ -89,3 +89,33 @@ def run_serving(
                         flush=True,
                     )
     return records
+
+
+def offline_throughput(
+    model_path: str, specs: list[RequestSpec], *, max_num_seqs: int = 256
+) -> dict[str, Any]:
+    """The engine alone: every request submitted at once to vLLM's offline `LLM`: no HTTP server, no client.
+
+    Compared with the served peak, it separates what the GPU engine can do from the serving overhead.
+    """
+    import time
+
+    from vllm import LLM, SamplingParams
+
+    llm = LLM(model=model_path, max_num_seqs=max_num_seqs, enable_prefix_caching=False, seed=0)
+    prompts = [{"prompt_token_ids": s.prompt} for s in specs]
+    params = [SamplingParams(max_tokens=s.max_tokens, ignore_eos=True, temperature=0.0) for s in specs]
+    llm.generate(prompts[:8], params[:8])  # warm-up
+    start = time.perf_counter()
+    outputs = llm.generate(prompts, params)
+    elapsed = time.perf_counter() - start
+    output_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
+    prompt_tokens = sum(len(s.prompt) for s in specs)
+    return {
+        "requests": len(specs),
+        "max_num_seqs": max_num_seqs,
+        "elapsed_s": elapsed,
+        "output_tokens": output_tokens,
+        "output_throughput": output_tokens / elapsed,
+        "total_throughput": (output_tokens + prompt_tokens) / elapsed,
+    }
