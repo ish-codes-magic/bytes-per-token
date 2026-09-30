@@ -1,0 +1,15 @@
+# M2 quality baselines (BF16). Run: uv run --only-group local modal run infra/modal_app.py::m2q
+models: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B]
+
+perplexity:            # teacher-forced, on WikiText-2 (test split), in non-overlapping windows
+  dataset: wikitext-2-raw-v1
+  window: 2048
+  max_windows: 40
+
+needle:                # context length × depth × secret; a cell passes when the answer has the secret
+  max_model_len: 34000
+  lengths: [1024, 4096, 8192, 16384, 32000]
+  depths: [0.0, 0.25, 0.5, 0.75, 1.0]
+  secrets: ["4729", "8136", "2051"]
+
+tasks: {}              # the default suite in fastserve.quality.tasks: GSM8K 5-shot, MMLU 5-shot (20/subject), HumanEval
