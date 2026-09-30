@@ -38,8 +38,13 @@ def recipe(fmt: str) -> list:
         ]
     if fmt == "gptq":
         return [GPTQModifier(targets=["Linear"], scheme="W4A16", ignore=ignore)]
-    if fmt == "awq":
-        return [AWQModifier(), QuantizationModifier(targets=["Linear"], scheme="W4A16", ignore=ignore)]
+    if (
+        fmt == "awq"
+    ):  # AWQ caches every parent module's inputs and outputs: keep them in CPU memory, not the L4's
+        return [
+            AWQModifier(offload_device="cpu"),
+            QuantizationModifier(targets=["Linear"], scheme="W4A16", ignore=ignore),
+        ]
     raise ValueError(f"unknown format {fmt!r}; expected one of {FORMATS}")
 
 
