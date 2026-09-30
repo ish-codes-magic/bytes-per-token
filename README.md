@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 3 (quantization from scratch). Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 3 (quantization from scratch) is in gate review. Results appear below as each milestone lands.
 
 ---
 
@@ -93,6 +93,30 @@ A quality baseline (perplexity, GSM8K, MMLU, HumanEval, needle-in-a-haystack to 
 change must meet. Details are in the [M2 learning doc](docs/learning/M2-baselines.md) and the
 [gate report](docs/gates/M2-report.md).
 
+### M3: quantization from scratch
+
+Round-to-nearest, FP8 and NF4 formats, GPTQ, AWQ, Hadamard rotation and SmoothQuant, written in plain PyTorch
+and tested against their definitions. Our GPTQ and AWQ match llm-compressor's within a few percent when run on
+the same model, grid and calibration data.
+
+![Quality against size for every configuration](results/figures/m3_pareto.png)
+
+<!-- BEGIN GENERATED: caption-m3_pareto -->
+*At about 4 bits per weight the method decides the damage, from KL 18 (RTN INT4 per-tensor) down to 0.171 (rotated, GPTQ INT4 g128, full range); the smallest configuration still weighs 0.44 GB, mostly its BF16 embedding.*
+<!-- END GENERATED: caption-m3_pareto -->
+
+The outlier atlas explains the spread. A few residual channels are orders of magnitude larger than the rest,
+written by one early MLP, and every weight that reads them turns rounding error into large output error:
+
+![Activation outliers by layer and channel](results/figures/m3_outlier_atlas.png)
+
+<!-- BEGIN GENERATED: caption-m3_outlier_atlas -->
+*A handful of residual channels (35, 13, 1) reach 1,295× the median channel's maximum; down_proj's input peaks at 629× its median.*
+<!-- END GENERATED: caption-m3_outlier_atlas -->
+
+Details, including why rotation *hurt* round-to-nearest here, are in the
+[M3 learning doc](docs/learning/M3-quant-reference.md) and the [gate report](docs/gates/M3-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -141,7 +165,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | M0 | Foundations: cloud environment, measured hardware roofline | ✅ Done |
 | M1 | nanoserve: inference from scratch, prefill vs decode | ✅ Done |
 | M2 | Baselines: vLLM benchmarks + quality harness | ✅ Done |
-| M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | 🚧 In progress |
+| M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | 🔍 Gate review |
 | M4 | Quantization in production: format crossover vs batch size | ⏳ |
 | M5 | KV-cache quantization and prefix caching | ⏳ |
 | M6 | Speculative decoding, proven lossless | ⏳ |
@@ -177,6 +201,7 @@ uv run --only-group local modal run infra/modal_app.py::test_gpu   # GPU tests o
 uv run --only-group local modal run infra/modal_app.py::probe      # measure the GPU -> results/raw/
 uv run --only-group local modal run infra/modal_app.py::m2         # vLLM serving baselines -> results/raw/
 uv run --only-group local modal run infra/modal_app.py::m2q        # quality baselines -> results/raw/
+uv run --only-group local modal run infra/modal_app.py::m3         # quantization from scratch -> results/raw/
 uv run --only-group local modal run infra/modal_app.py::figures    # draw -> results/figures/
 uv run --only-group local python scripts/render_docs.py            # refresh generated tables in the docs
 ```
