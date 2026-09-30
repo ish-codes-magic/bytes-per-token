@@ -1,0 +1,1 @@
+In BF16, both models retrieve the needle in 100% of cells up to 32k tokens: the bar that KV-cache compression must not lower.

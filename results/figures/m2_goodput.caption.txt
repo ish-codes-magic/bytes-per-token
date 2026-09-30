@@ -1,0 +1,1 @@
+Qwen3-0.6B keeps at least 90% of requests within the SLO up to 12 req/s; past that the queue grows and goodput falls even though requests keep completing.

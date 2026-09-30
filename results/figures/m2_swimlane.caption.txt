@@ -1,0 +1,1 @@
+Mid-run at 32 req/s, up to 59 of these 60 requests decode together, and waits for a first token reach 300 ms (median 192 ms).

@@ -1,0 +1,1 @@
+With a 32k-token prompt, Qwen3-0.6B takes 3,334 ms to its first token, and each later token is 3.5× slower than in chat: every step re-reads the whole KV cache.
