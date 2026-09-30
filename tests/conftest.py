@@ -464,3 +464,115 @@ def m3_records() -> list[dict[str, Any]]:
     ]
     add("m3_sensitivity", {"model": "Qwen/Qwen3-0.6B", "spec": "INT4 g128 sym", "windows": 4, "cells": cells})
     return records
+
+
+@pytest.fixture
+def m4_records() -> list[dict[str, Any]]:
+    """A hand-made M4 campaign: every format of both models, with round numbers."""
+    env = {"gpu": "NVIDIA L4", "gpu_memory_bytes": 24 * 2**30}
+    git = {"commit": "0123456789abcdef", "dirty": False}
+    speed = {"bf16": 1.0, "fp8": 1.5, "int8": 1.4, "gptq": 2.0, "awq": 2.0}  # batch-1 speedups
+    at_256 = {"bf16": 1.0, "fp8": 1.2, "int8": 1.1, "gptq": 0.9, "awq": 0.9}
+    weights = {"bf16": 1.2, "fp8": 0.8, "int8": 0.8, "gptq": 0.6, "awq": 0.6}
+    records = []
+
+    def add(experiment, metrics, stamp="2026-10-01T00:00:00+00:00"):
+        record = make_record(experiment, metrics, run_id="m4test", env=env, git=git, config={})
+        record["timestamp"] = stamp
+        records.append(record)
+
+    def summary(tok_s, tpot, ttft=20.0):
+        return {"output_throughput": tok_s, "tpot_ms": {"p50": tpot}, "ttft_ms": {"p50": ttft}}
+
+    for model, scale in (("Qwen/Qwen3-0.6B", 1.0), ("Qwen/Qwen3-1.7B", 2.5)):
+        for fmt in speed:
+            kernels = [] if fmt == "bf16" else [f"Using {fmt.title()}LinearKernel for CompressedTensorsW"]
+            add(
+                "server_start",
+                {
+                    "label": fmt,
+                    "model": model,
+                    "kv_cache_tokens": int(100_000 * (1 + 0.1 * (2 - weights[fmt]))),
+                    "model_memory_gib": weights[fmt] * scale,
+                    "kv_cache_memory_gib": 19.0,
+                    "kernels": kernels,
+                },
+            )
+            base = {"server": fmt, "model": model, "requests": {"columns": [], "rows": []}}
+            tpot = 6.0 * scale / speed[fmt]
+            add(
+                "serving",
+                {
+                    **base,
+                    "workload": "chat",
+                    "load": {"mode": "closed", "concurrency": 1},
+                    "summary": summary(1000 / tpot, tpot),
+                },
+            )
+            add(
+                "serving",
+                {
+                    **base,
+                    "workload": "long_8k",
+                    "load": {"mode": "closed", "concurrency": 1},
+                    "summary": summary(50, 10, ttft=400 * scale / (1.5 if fmt in ("fp8", "int8") else 1)),
+                },
+            )
+            for batch in (1, 4, 16, 64, 256):
+                ratio = at_256[fmt] if batch == 256 else speed[fmt]  # INT4 leads until batch 256
+                add(
+                    "serving",
+                    {
+                        **base,
+                        "workload": "decode",
+                        "load": {"mode": "closed", "concurrency": batch},
+                        "summary": summary(100 * batch * ratio / scale, 10),
+                    },
+                )
+            columns = [
+                "t",
+                "running",
+                "waiting",
+                "kv_usage",
+                "prompt_tokens",
+                "generation_tokens",
+                "steps",
+                "preemptions",
+            ]
+            tok_s = 2000 * at_256[fmt] / scale
+            rows = [[t, 200, 10, 0.9, 500 * t, tok_s * t, 10 * t, 0] for t in range(5)]
+            add(
+                "serving",
+                {
+                    **base,
+                    "workload": "saturation",
+                    "load": {"mode": "closed", "concurrency": 512},
+                    "summary": summary(tok_s, 100),
+                    "server_timeline": {"columns": columns, "rows": rows},
+                },
+            )
+            if fmt != "bf16":
+                add(
+                    "m4_tasks",
+                    {
+                        "model": model,
+                        "format": fmt,
+                        "scores": {"gsm8k": {"score": 0.40 - 0.05 * (fmt in ("gptq", "awq"))}},
+                    },
+                )
+                add(
+                    "m3_config",
+                    {"model": model, "config": fmt, "mean_kl": 0.02 if fmt in ("fp8", "int8") else 0.3},
+                )
+                add(
+                    "m4_checkpoint",
+                    {
+                        "model": model,
+                        "format": fmt,
+                        "checkpoint": f"/cache/m4/x-{fmt}",
+                        "quantize_s": 60.0,
+                        "checkpoint_bytes": int(weights[fmt] * 1e9),
+                        "max_levels_per_group": 16,
+                    },
+                )
+    return records
