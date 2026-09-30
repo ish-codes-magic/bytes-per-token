@@ -218,7 +218,6 @@ def needle_heatmaps(quality_records: Records) -> tuple[plt.Figure, str]:
     q = quality_by_model(quality_records)
     models = [m for m in (SMALL, LARGE) if "needle_cells" in q.get(m, {})]
     fig, axes = plt.subplots(1, len(models), figsize=(5 * len(models) + 1, 4), squeeze=False)
-    worst = (100.0, "")
     for ax, model in zip(axes[0], models, strict=True):
         cells = q[model]["needle_cells"]
         lengths = sorted({c["length"] for c in cells})
@@ -245,12 +244,15 @@ def needle_heatmaps(quality_records: Records) -> tuple[plt.Figure, str]:
         ax.set_yticks(range(len(depths)), [f"{d:.0%}" for d in depths])
         ax.set(xlabel="context length (tokens)", ylabel="needle depth", title=model.split("/")[-1])
         ax.grid(False)
-        worst = min(worst, (q[model]["needle"], model.split("/")[-1]))
     fig.suptitle("Needle in a haystack (BF16): passed / tried", fontweight="bold")
-    caption = (
-        f"In BF16 the weaker model ({worst[1]}) retrieves the needle in {worst[0]:.0f}% of cells "
-        "up to 32k tokens: the bar KV-cache compression must not lower."
-    )
+    rates = {model.split("/")[-1]: q[model]["needle"] for model in models}
+    if len(set(rates.values())) == 1:
+        who = "both models retrieve" if len(rates) > 1 else f"{next(iter(rates))} retrieves"
+        caption = f"In BF16, {who} the needle in {next(iter(rates.values())):.0f}% of cells"
+    else:
+        name, rate = min(rates.items(), key=lambda kv: kv[1])
+        caption = f"In BF16 the weaker model ({name}) retrieves the needle in {rate:.0f}% of cells"
+    caption += " up to 32k tokens: the bar that KV-cache compression must not lower."
     return fig, caption
 
 
