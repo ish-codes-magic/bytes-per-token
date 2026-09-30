@@ -1,6 +1,7 @@
 """M2: serving baselines. Start each server configuration, drive every workload at every load point.
 
-One record per (server, workload, load point): the summary metrics plus a compact per-request timing table.
+One record per (server, workload, load point): the summary metrics, a compact per-request timing table, and a
+timeline of the server's own metrics (running and waiting requests, KV-cache use, tokens, engine steps).
 """
 
 from __future__ import annotations
@@ -12,17 +13,37 @@ from typing import Any
 from fastserve.engine.loader import model_dir
 from fastserve.results import environment_info, make_record, new_run_id
 from fastserve.serving.client import run_load
-from fastserve.serving.metrics import request_rows, summarize
+from fastserve.serving.metrics import RequestResult, request_rows, summarize
 from fastserve.serving.server import VLLMServer
+from fastserve.serving.server_metrics import sample_server
 from fastserve.serving.workloads import RequestSpec, Workload
 
-_KV_TOKENS = re.compile(r"GPU KV cache size: ([\d,]+) tokens")
+# Settings vLLM chooses at startup and prints: how many tokens of KV cache fit after loading the weights, and
+# how many tokens one engine step may process (the chunked-prefill budget, shared by prefills and decodes).
+_FROM_LOG = {
+    "kv_cache_tokens": re.compile(r"GPU KV cache size: ([\d,]+) tokens"),
+    "max_num_batched_tokens": re.compile(r"max_num_batched_tokens=([\d,]+)"),
+}
 
 
-def _kv_cache_tokens(server: VLLMServer) -> int | None:
-    """vLLM logs how many tokens of KV cache fit after loading the weights: record it with every run."""
-    match = _KV_TOKENS.search(server.log_path.read_text(errors="replace"))
-    return int(match.group(1).replace(",", "")) if match else None
+def _from_log(server: VLLMServer) -> dict[str, int | None]:
+    log = server.log_path.read_text(errors="replace")
+    found = {key: pattern.search(log) for key, pattern in _FROM_LOG.items()}
+    return {key: int(m.group(1).replace(",", "")) if m else None for key, m in found.items()}
+
+
+async def _monitored(
+    url: str, model: str, specs: list[RequestSpec], load: dict[str, Any], seed: int
+) -> tuple[list[RequestResult], dict[str, Any]]:
+    """Run one load point while sampling the server's /metrics; the two clocks start within milliseconds."""
+    import aiohttp
+
+    stop = asyncio.Event()
+    async with aiohttp.ClientSession() as session:
+        sampler = asyncio.create_task(sample_server(session, url, stop))
+        results = await run_load(url, model, specs, load, seed)
+        stop.set()
+        return results, await sampler
 
 
 def _warm_up(server: VLLMServer, model: str) -> None:
@@ -55,7 +76,7 @@ def run_serving(
                     "model": model,
                     "args": args,
                     "startup_s": server.startup_s,
-                    "kv_cache_tokens": _kv_cache_tokens(server),
+                    **_from_log(server),
                 },
             )
             _warm_up(server, model)
@@ -63,7 +84,7 @@ def run_serving(
                 specs = Workload.from_config(name, workloads[name]).requests()
                 for load in loads:
                     subset = specs[: load.get("requests", len(specs))]
-                    results = asyncio.run(run_load(server.url, model, subset, load, seed))
+                    results, timeline = asyncio.run(_monitored(server.url, model, subset, load, seed))
                     summary = summarize(
                         results,
                         slo_ttft_s=slo["ttft_ms"] / 1e3,
@@ -80,6 +101,7 @@ def run_serving(
                             "load": load,
                             "summary": summary,
                             "requests": request_rows(results),
+                            "server_timeline": timeline,
                         },
                     )
                     print(
