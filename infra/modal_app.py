@@ -417,6 +417,19 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             from fastserve.viz import m3_figures
 
             written = m3_figures.make_all(raw["m3"], tmp)
+        elif milestone == "m4":
+            from fastserve.hw.analysis import measured_bandwidth, measured_peak_flops
+            from fastserve.viz import m4_figures
+
+            configs = {
+                model: ModelConfig.from_pretrained_json(
+                    Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
+                )
+                for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")
+            }
+            peaks = measured_peak_flops(raw["hw"])
+            hw = {"bandwidth": measured_bandwidth(raw["hw"]), "bf16": peaks["bf16"], "fp8": peaks["fp8"]}
+            written = m4_figures.make_all(raw["m4"], configs, hw, tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -558,12 +571,14 @@ def figures(milestone: str = "all") -> None:
         from fastserve.report.m2 import newest_per_model
 
         raw["m2q"] = newest_per_model(read_jsonl(quality))
-    quant = raw_dir / "m3_quant.jsonl"
-    if quant.exists():  # every run: M3 tasks can be re-run, and the report keeps the newest of each result
-        raw["m3"] = read_jsonl(quant)
+    for key, file in (("m3", "m3_quant.jsonl"), ("m4", "m4_production.jsonl")):
+        if (
+            raw_dir / file
+        ).exists():  # every run: tasks can be re-run, and the reports keep the newest result
+            raw[key] = read_jsonl(raw_dir / file)
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2", "m3"] if milestone == "all" else [milestone]:
+    for ms in ["m0", "m1", "m2", "m3", "m4"] if milestone == "all" else [milestone]:
         if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():

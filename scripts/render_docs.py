@@ -21,6 +21,7 @@ from fastserve.hw.analysis import (  # noqa: E402
     measured_peak_flops,
     metrics_of,
 )
+from fastserve.report import m4 as m4_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -56,6 +57,18 @@ from fastserve.report.tables import (  # noqa: E402
     prediction_table,
 )
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
+
+
+def m4_blocks(m4: list, m2_quality: list, m3: list) -> dict[str, str]:
+    predictions = json.loads((REPO / "benchmarks" / "predictions" / "m4.json").read_text(encoding="utf-8"))
+    return {
+        "m4_predictions": prediction_table(predictions, m4_report.m4_observables(m4, m2_quality, m3)),
+        "m4_speed": m4_report.speed_table(m4),
+        "m4_decode_small": m4_report.decode_table(m4, "Qwen/Qwen3-0.6B"),
+        "m4_decode_large": m4_report.decode_table(m4, "Qwen/Qwen3-1.7B"),
+        "m4_quality": m4_report.quality_table(m4, m2_quality),
+        "m4_checkpoints": m4_report.checkpoint_table(m4),
+    }
 
 
 def compute_spend(path: Path) -> str:
@@ -170,6 +183,9 @@ def build_blocks() -> dict[str, str]:
     quant = REPO / "results" / "raw" / "m3_quant.jsonl"
     if quant.exists():
         blocks.update(m3_blocks(read_jsonl(quant)))  # every run: tasks can be re-run, the newest result wins
+    production = REPO / "results" / "raw" / "m4_production.jsonl"
+    if production.exists() and quant.exists() and quality.exists():
+        blocks.update(m4_blocks(read_jsonl(production), read_jsonl(quality), read_jsonl(quant)))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
