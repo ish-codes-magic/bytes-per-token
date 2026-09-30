@@ -72,6 +72,10 @@ def m4_blocks(m4: list, m2_quality: list, m3: list, configs: dict, bandwidth: fl
         "m4_gsm8k": m4_report.gsm8k_failure_table(m4, m2_quality),
         "m4_bytes_model": m4_report.bytes_model_table(m4, configs, bandwidth),
         "m4_crossover": m4_report.crossover_table(m4),
+        "m4_gsm8k_talking": m4_report.gsm8k_example(
+            m4, "Qwen/Qwen3-1.7B", "gptq", "right, then kept talking"
+        ),
+        "m4_gsm8k_looping": m4_report.gsm8k_example(m4, "Qwen/Qwen3-0.6B", "gptq", "looping"),
     }
 
 
