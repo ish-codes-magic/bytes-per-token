@@ -1,6 +1,6 @@
 {
   "milestone": "M3",
-  "written_in_commit": "pending",
+  "written_in_commit": "16766ba",
   "note": "Written before quantizing any real model. KL is nats per token against BF16 nanoserve on WikiText-2 (test), Qwen3-0.6B unless stated. Reasoning is in docs/learning/M3-quant-reference.md, section 4.",
   "predictions": [
     {"id": "bf16_ppl", "label": "BF16 perplexity in nanoserve (vs Hugging Face in M2)", "low": 19.3, "high": 19.8},
