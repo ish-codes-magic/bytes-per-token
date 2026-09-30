@@ -1,0 +1,1 @@
+55% of weights sit within a quarter of their group's max from zero: NF4 puts 6 of its 16 levels there, uniform INT4 only 3; activations are harsher, with a token's typical value 43× below its max.

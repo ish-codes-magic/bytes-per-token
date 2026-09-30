@@ -136,6 +136,13 @@ def _method_label(e: dict[str, Any]) -> str:
     return e["name"]
 
 
+def _fmt_ppl(ref: float, cand: float) -> str:
+    """Perplexity and its change: a percentage while it's modest, a factor once the model has collapsed."""
+    ratio = cand / ref
+    change = f"{ratio - 1:+.1%}" if ratio < 2 else f"×{ratio:,.3g}"
+    return f"{cand:,.2f} ({change})" if cand < 1000 else f"{cand:.2e} ({change})"
+
+
 def _fmt_kl(x: float) -> str:
     return f"{x:.2e}" if 0 < x < 0.01 else f"{x:.3f}"
 
@@ -148,14 +155,13 @@ def config_table(records: Records, names: list[str], model: str = SMALL, referen
         if name not in c:
             continue
         m = c[name]
-        ppl = m["perplexity_cand"] / m["perplexity_ref"] - 1
         row = [
             label(m["entry"]),
             f"{m['bits_per_weight']:.2f}",
             f"{m['model_gb']:.2f}",
             _fmt_kl(m["mean_kl"]),
             f"{m['top1_agreement']:.1%}",
-            f"{m['perplexity_cand']:.2f} ({ppl:+.1%})",
+            _fmt_ppl(m["perplexity_ref"], m["perplexity_cand"]),
         ]
         if reference:
             ref = c.get(reference, {}).get("mean_kl")

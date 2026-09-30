@@ -1,0 +1,1 @@
+On a 16×32 slice of layer 1's q_proj (INT3 per-channel sym), each rounded column's error is pushed onto the columns to its right; the output error ends 3.7× lower than round-to-nearest's.

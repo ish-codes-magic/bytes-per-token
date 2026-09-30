@@ -1,0 +1,1 @@
+Going from 4 to 3 bits multiplies round-to-nearest's KL by 10×; at 4 bits GPTQ keeps 75% of it on the same grid.

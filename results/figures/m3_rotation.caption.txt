@@ -1,0 +1,1 @@
+Rotating the residual stream spreads its outlier channels over all channels: the largest channel maximum drops from 1,295× to 1.3× the median.
