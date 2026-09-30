@@ -80,8 +80,6 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     big as its weights, so decode intensity is well below "≈ batch size".
 - **Gate M1 approved** (questions deferred by the owner). Tagged `v0.1-nanoserve`.
 
-## 2026-10-01
-
 - **M2 environment:** vLLM 0.30.0 pins PyTorch 2.13.0 (the research image has 2.14.0), so vLLM gets its own image
   and lock (`infra/serving.lock`) instead of changing the environment M0/M1 were measured in.
 - **Dead end: slim base image.** vLLM loaded the model, compiled, captured CUDA graphs and sized the KV cache
@@ -90,3 +88,33 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   image on `nvidia/cuda:13.0.1-devel-ubuntu24.04`.
 - **Startup is slow (224 s):** the likely cause is FlashInfer recompiling every container start. Its cache now
   lives on the Volume (`FLASHINFER_WORKSPACE_BASE`), next to vLLM's compile cache (`VLLM_CACHE_ROOT`).
+- **The fix worked:** with both compile caches on the Volume, the server now starts in about 95–100 s.
+- **Library check:** `load_dataset("wikitext")` fails on current Hugging Face `datasets` ("Repository id must be
+  'namespace/name'"). The dataset lives at `Salesforce/wikitext`.
+- **Launcher bug:** the quality launcher lost every result when one (task, model) container failed. Each call is
+  now collected on its own, and a failure is reported without discarding the others.
+- **Reproducibility bug:** the needle grid seeded its random choices with `hash()`, which Python randomizes per
+  process. It now uses `zlib.crc32`.
+- **M2 speed results (run from `7a35017`):**
+  - vLLM's offline engine is no faster than the served one, so HTTP and our client aren't the bottleneck.
+  - **My 32k TTFT prediction left out the ×28 layers** in the attention FLOPs. Prefill actually runs at 68–83%
+    of the M0 BF16 peak. FLOP counts now live in tested code (`report.m2.prefill_flops`).
+  - **I first misread the peak.** I compared a KV-bound ceiling with the sweep's best whole-run average and
+    reported "62% of the ceiling". Then, from client timestamps alone, I estimated a ~4,000 tok/s burst and
+    called the peak half the real capacity. Both were wrong. The saturation run (a queue held for minutes, rates
+    from vLLM's own `/metrics`) shows a sustained 1,849 tok/s for Qwen3-0.6B, 54% of the ceiling set by its live
+    KV cache. **Lesson: capacity is a steady-state rate, read from the server's counters.**
+  - **Prefill interference halves saturated decode.** With requests waiting, every step carries ~400 prompt
+    tokens and runs at 53–54% of the memory speed. After the queue drains, the same engine runs at 86–88%.
+    **Open question for M8:** those prompt tokens are little matmul work, so where does the extra time go?
+    Candidates: mixed batches exceeding the CUDA-graph capture sizes, the mixed prefill/decode attention path,
+    and CPU contention with the load generator on the same 8 vCPUs.
+  - **Token-weighted context predicted the batch's context** (647 tokens per sequence; the server measured
+    ~630). Long requests dominate the running set.
+  - **Shared prefix is scheduler-bound:** each step's 2,048-token budget admits about one prompt, and Little's
+    law in steps gives the batch size (~60 predicted, 56–58 measured, for both models).
+  - vLLM 0.30 doesn't log `max_num_batched_tokens` in a form the log parser found; the timeline measures it
+    instead (~2,050 tokens per step).
+  - vLLM sizes the KV cache at every start: 142,928 then 152,800 tokens for the 1.7B on identical containers.
+- **M2 quality results:** all 10 predictions within range. The needle test is saturated (100% for both models),
+  so it can only catch breakage. KL and perplexity are the sensitive measures.
