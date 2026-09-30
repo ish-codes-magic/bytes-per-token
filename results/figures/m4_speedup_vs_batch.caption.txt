@@ -1,0 +1,1 @@
+On Qwen3-1.7B, INT4 decodes 2.2× faster than BF16 at batch 1 but 1.1× at batch 256; FP8 overtakes it from batch 256.

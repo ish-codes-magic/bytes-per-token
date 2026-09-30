@@ -1,0 +1,1 @@
+Smaller weights hand their memory to the KV cache: on Qwen3-1.7B, INT4 weights free 2.0 GiB and the KV cache grows from 16.3 to 17.2 GiB.

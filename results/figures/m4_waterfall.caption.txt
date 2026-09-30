@@ -1,0 +1,1 @@
+On Qwen3-1.7B the cheapest format cuts $ per 1M tokens by 54% for one user (INT4 W4A16 (GPTQ)) but by 6% on a saturated server (INT8 W8A8), where the KV cache dominates every step.

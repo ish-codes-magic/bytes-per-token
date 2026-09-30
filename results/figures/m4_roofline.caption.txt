@@ -1,0 +1,1 @@
+Smaller weights move every format's decode points right; at batch 256 FP8 reaches 15.9 TFLOP/s against BF16's 14.2, far below the peaks: the KV cache and fixed costs keep decode memory-bound.
