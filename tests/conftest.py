@@ -217,3 +217,112 @@ def m1_records() -> list[dict[str, Any]]:
     }
     records.append(rec("continuous_batching", batching))
     return records
+
+
+@pytest.fixture
+def m2_records() -> list[dict[str, Any]]:
+    """A small hand-made M2 run: two models, every workload, a few load points."""
+    env, git = {"gpu": "NVIDIA L4"}, {"commit": "0123456789abcdef", "dirty": False}
+
+    def rec(experiment: str, metrics: dict[str, Any]) -> dict[str, Any]:
+        return make_record(experiment, metrics, run_id="m2test", env=env, git=git, config={})
+
+    def summary(tok_s, ttft, tpot, good=1.0, req_s=1.0):
+        dist = lambda x: {"mean": x, "p50": x, "p90": 1.5 * x, "p99": 2 * x, "max": 3 * x}  # noqa: E731
+        return {
+            "requests": 10,
+            "completed": 10,
+            "errors": 0,
+            "duration_s": 10.0,
+            "request_throughput": req_s,
+            "output_throughput": tok_s,
+            "goodput_requests": good * req_s,
+            "goodput_fraction": good,
+            "ttft_ms": dist(ttft),
+            "tpot_ms": dist(tpot),
+            "itl_ms": dist(tpot),
+            "e2e_ms": dist(10 * tpot),
+            "dollars_per_million_output_tokens": 0.8 / (tok_s * 3600) * 1e6,
+        }
+
+    def requests(n=10, gap=0.1, ttft=0.02, dur=1.0):
+        rows = [
+            [i, 100, 50, i * gap, i * gap, i * gap + ttft * (1 + i), i * gap + ttft * (1 + i) + dur]
+            for i in range(n)
+        ]
+        return {
+            "columns": ["id", "prompt_len", "output_tokens", "scheduled", "sent", "first_token", "finished"],
+            "rows": rows,
+        }
+
+    records = []
+    for model, scale in (("Qwen/Qwen3-0.6B", 1.0), ("Qwen/Qwen3-1.7B", 2.5)):
+        records.append(
+            rec(
+                "server_start",
+                {"model": model, "label": "vllm-bf16", "startup_s": 60, "kv_cache_tokens": 170000},
+            )
+        )
+        records.append(
+            rec(
+                "serving",
+                {
+                    "model": model,
+                    "workload": "chat",
+                    "load": {"mode": "closed", "concurrency": 1},
+                    "summary": summary(150 / scale, 20, 6.5 * scale),
+                    "requests": requests(),
+                },
+            )
+        )
+        for rate, tok_s, good in ((2, 500, 1.0), (8, 2000, 0.95), (16, 3500, 0.5)):
+            records.append(
+                rec(
+                    "serving",
+                    {
+                        "model": model,
+                        "workload": "throughput",
+                        "load": {"mode": "open", "rate": rate},
+                        "summary": summary(tok_s / scale, 30 * rate, 7 + rate, good, rate * 0.9),
+                        "requests": requests(ttft=0.01 * rate),
+                    },
+                )
+            )
+        records.append(
+            rec(
+                "serving",
+                {
+                    "model": model,
+                    "workload": "throughput",
+                    "load": {"mode": "closed", "concurrency": 64},
+                    "summary": summary(4000 / scale, 200, 20),
+                    "requests": requests(),
+                },
+            )
+        )
+        for workload, ttft, tpot in (("long_8k", 150, 9), ("long_16k", 320, 13), ("long_32k", 700, 20)):
+            records.append(
+                rec(
+                    "serving",
+                    {
+                        "model": model,
+                        "workload": workload,
+                        "load": {"mode": "closed", "concurrency": 1},
+                        "summary": summary(50, ttft * scale, tpot * scale),
+                        "requests": requests(n=3),
+                    },
+                )
+            )
+        records.append(
+            rec(
+                "serving",
+                {
+                    "model": model,
+                    "workload": "shared_prefix",
+                    "load": {"mode": "open", "rate": 16},
+                    "summary": summary(900, 80, 9, 1.0, 14.0),
+                    "requests": requests(),
+                },
+            )
+        )
+    return records
