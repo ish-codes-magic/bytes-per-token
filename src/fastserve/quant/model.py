@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -129,32 +130,82 @@ def awq_model(
     ids: torch.Tensor,
     cfg: AWQConfig,
     batch: int = 4,
-    search_tokens: int = 32768,
+    search_samples: int = 16,
     clip_tokens: int = 512,
 ) -> list[dict[str, Any]]:
-    """AWQ every decoder layer: search and fold the scales, clip, then round. Returns each group's search."""
+    """AWQ every decoder layer: search and fold the scales, optionally clip, then round.
+
+    Channel statistics x̄ come from every calibration token. The α search runs each group's parent module (the
+    attention block, the MLP, or down_proj itself) on the first `search_samples` sequences. Returns each
+    group's search.
+    """
     runner = LayerRunner(model, ids, batch)
     stats = []
     for i, layer in enumerate(model.model.layers):
-        groups = input_groups(layer)
-        # one reader per group sees the group's input; o_proj has no scale group but is still clipped
-        readers = {g.name: g.linears[0] for g in groups} | {"o": layer.self_attn.o_proj}
-        seen: dict[str, list[torch.Tensor]] = {name: [] for name in readers}
-        with capture_inputs(readers, lambda name, x, out=seen: out[name].append(x.reshape(-1, x.shape[-1]))):
-            next_hidden = runner.run(layer)  # full-precision outputs feed the next layer (as AutoAWQ)
-        inputs = {name: _subsample(torch.cat(xs), search_tokens) for name, xs in seen.items()}
-        scales = {}
-        for group in groups:
-            scales[group.name], result = awq_group(group, inputs[group.name], cfg)
-            stats.append({"layer": i, **result})
         attn = layer.self_attn
-        for group in groups:
-            x = _subsample(inputs[group.name], clip_tokens) / scales[group.name]  # what the scaled layer sees
-            for module in group.linears:
+        seen = _awq_capture(layer, runner, search_samples, clip_tokens)
+        scales = {}
+        for group in input_groups(layer):
+            calls = seen.calls[group.name]
+            parent = seen.parents[group.name]
+            scales[group.name], result = awq_group(
+                group, seen.x_mean[group.name], lambda p=parent, c=calls: torch.cat([p(*a) for a in c]), cfg
+            )
+            stats.append({"layer": i, **result})
+        for group in input_groups(layer):
+            x = seen.clip_inputs[group.name] / scales[group.name]  # what the scaled layer will see
+            for module in group.linears:  # q and k are not clipped: softmax amplifies their errors
                 awq_quantize_linear(module, None if module in (attn.q_proj, attn.k_proj) else x, cfg)
-        awq_quantize_linear(attn.o_proj, _subsample(inputs["o"], clip_tokens), cfg)
-        runner.hidden = next_hidden
+        awq_quantize_linear(attn.o_proj, seen.clip_inputs["o"], cfg)
+        runner.hidden = seen.next_hidden
     return stats
+
+
+@dataclass
+class _AWQInputs:
+    parents: dict[str, nn.Module]  # the module whose output each group's search preserves
+    calls: dict[str, list[tuple]]  # the parent's arguments on the first sequences
+    x_mean: dict[str, torch.Tensor]  # mean |x| per input channel, over every calibration token
+    clip_inputs: dict[str, torch.Tensor]  # a few hundred input rows per group, for the clip search
+    next_hidden: torch.Tensor  # the layer's full-precision outputs
+
+
+def _awq_capture(layer: nn.Module, runner: LayerRunner, search_samples: int, clip_tokens: int) -> _AWQInputs:
+    """Run one layer on all calibration data, recording what AWQ's searches need."""
+    attn, mlp = layer.self_attn, layer.mlp
+    groups = input_groups(layer)
+    parents = {"qkv": attn, "gate_up": mlp, "down": mlp.down_proj}
+    calls: dict[str, list[tuple]] = {name: [] for name in parents}
+    sums = {g.name: torch.zeros(g.linears[0].in_features, device=runner.hidden.device) for g in groups}
+    counts = dict.fromkeys(sums, 0)
+    rows: dict[str, list[torch.Tensor]] = {name: [] for name in (*sums, "o")}
+
+    def keep_args(name: str, args: tuple) -> None:
+        if sum(a[0].shape[0] for a in calls[name]) < search_samples:
+            calls[name].append(args)
+
+    def observe(name: str, x: torch.Tensor) -> None:
+        flat = x.reshape(-1, x.shape[-1])
+        if name in sums:
+            sums[name] += flat.abs().float().sum(dim=0)
+            counts[name] += len(flat)
+        rows[name].append(_subsample(flat, clip_tokens))
+
+    handles = [p.register_forward_pre_hook(lambda _, a, n=n: keep_args(n, a)) for n, p in parents.items()]
+    readers = {g.name: g.linears[0] for g in groups} | {"o": attn.o_proj}
+    try:
+        with capture_inputs(readers, observe):
+            next_hidden = runner.run(layer)  # full-precision outputs feed the next layer (as AutoAWQ)
+    finally:
+        for handle in handles:
+            handle.remove()
+    return _AWQInputs(
+        parents=parents,
+        calls=calls,
+        x_mean={name: sums[name] / counts[name] for name in sums},
+        clip_inputs={name: _subsample(torch.cat(r), clip_tokens) for name, r in rows.items()},
+        next_hidden=next_hidden,
+    )
 
 
 def _subsample(x: torch.Tensor, n: int) -> torch.Tensor:
