@@ -170,6 +170,8 @@ def m2_run(config_path: str, git: dict, only: list[str] | None = None) -> list[d
     """Serving experiments from a config: every server, or only the named ones (one container each in M4)."""
     import yaml
 
+    hf_cache.reload()  # a warm, reused container would otherwise miss checkpoints committed since it started
+
     from fastserve.experiments.m2 import run_serving
     from fastserve.results import to_plain
 
@@ -240,6 +242,8 @@ def m3_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """One section of the M3 config (a set of quantized configurations, or an analysis) on one L4."""
     import yaml
 
+    hf_cache.reload()  # see checkpoints committed by other containers since this one started
+
     from fastserve.experiments.m3 import run_task
     from fastserve.results import to_plain
 
@@ -285,6 +289,8 @@ def m4_checkpoint(fmt: str, model: str, config_path: str, run_id: str, git: dict
 def m4_suite(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """M2's lm-eval suite on one quantized checkpoint, served by vLLM with its real low-bit kernels."""
     import yaml
+
+    hf_cache.reload()  # see checkpoints committed by other containers since this one started
 
     from fastserve.experiments.m2_quality import tasks_task
     from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
