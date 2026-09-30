@@ -64,6 +64,17 @@ serving_image = (
     .add_local_dir(REPO / "benchmarks", f"{REMOTE}/benchmarks")
 )
 
+# The library-quantization image: llm-compressor, whose GPTQ and AWQ check our reference implementations (M3).
+# It resolves to the research image's PyTorch and transformers, but keeps its many extra packages to itself.
+quant_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .uv_pip_install(requirements=[str(REPO / "infra" / "quant.lock")])
+    .env({"PYTHONPATH": f"{REMOTE}/src", "HF_HOME": f"{CACHE}/huggingface"})
+    .workdir(REMOTE)
+    .add_local_dir(REPO / "src", f"{REMOTE}/src", ignore=["**/__pycache__"])
+    .add_local_dir(REPO / "benchmarks", f"{REMOTE}/benchmarks")
+)
+
 app = modal.App("bytes-per-token", image=image)
 hf_cache = modal.Volume.from_name("bpt-hf-cache", create_if_missing=True)
 
@@ -212,6 +223,47 @@ def m2_offline_run(model: str, config_path: str, git: dict) -> list[dict]:
         env=environment_info(),
     )
     return to_plain([record])
+
+
+@app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60)
+def quant_library_facts() -> str:
+    """The installed llm-compressor's defaults and grid formula, read before comparing against it."""
+    import importlib
+    import inspect
+    from importlib.metadata import version
+
+    from compressed_tensors.quantization import preset_name_to_scheme
+    from compressed_tensors.quantization.utils import helpers
+
+    lines = [f"llmcompressor {version('llmcompressor')}, compressed-tensors {version('compressed-tensors')}"]
+    for module, name in (
+        ("llmcompressor.modifiers.gptq", "GPTQModifier"),
+        ("llmcompressor.modifiers.transform", "AWQModifier"),
+        ("llmcompressor.modifiers.gptq.gptq_quantize", "quantize_weight"),
+    ):
+        try:
+            obj = getattr(importlib.import_module(module), name)
+        except (ImportError, AttributeError) as err:
+            lines.append(f"{module}.{name}: {err}")
+            continue
+        lines.append(f"{module}.{name}: {type(obj).__name__} defined in {getattr(obj, '__module__', '?')}")
+        fields = getattr(obj, "model_fields", None)
+        if fields:
+            lines += [f"  {field} = {info.default!r}" for field, info in fields.items()]
+        else:
+            lines.append(inspect.getsource(obj)[:3000])
+    lines.append(f"W4A16 preset: {preset_name_to_scheme('W4A16', ['Linear'])}")
+    lines.append(inspect.getsource(helpers.calculate_qparams))
+    awq = importlib.import_module("llmcompressor.modifiers.transform.awq.base")
+    for attr in ("_compute_best_scale", "_run_samples"):  # what AWQ's loss compares
+        method = getattr(awq.AWQModifier, attr, None)
+        lines.append(inspect.getsource(method)[:5000] if method else f"no {attr}")
+    try:  # which layers AWQ scales together for Qwen3
+        mappings = importlib.import_module("llmcompressor.modifiers.transform.awq.mappings")
+        lines.append(inspect.getsource(mappings)[:5000])
+    except (ImportError, OSError) as err:
+        lines.append(f"AWQ mappings: {err}")
+    return "\n".join(lines)
 
 
 @app.function(cpu=2, memory=4096, timeout=10 * 60)

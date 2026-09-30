@@ -1,0 +1,6 @@
+# llm-compressor: the library GPTQ/AWQ that M3 validates its reference implementations against.
+# Compile: uv pip compile infra/quant.in --python-version 3.12 --python-platform x86_64-manylinux_2_28 -o infra/quant.lock
+llmcompressor
+datasets
+safetensors
+pyyaml
