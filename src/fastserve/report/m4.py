@@ -283,7 +283,8 @@ def fidelity_table(m4: Records) -> str:
 
 
 def gsm8k_failure_table(m4: Records, m2_quality: Records) -> str:
-    """How each format's GSM8K answers fail: shares of every bucket, plus the suite's score for comparison."""
+    """How each format's GSM8K answers fail: each bucket's share, how often the model kept talking after its
+    final answer, and both scores: strict-match (the number after "####") and the suite's flexible-extract."""
     from fastserve.quality.gsm8k import BUCKETS
 
     found = {(m["model"], m["format"]): m for m in _newest(m4, "m4_gsm8k")}
@@ -293,18 +294,26 @@ def gsm8k_failure_table(m4: Records, m2_quality: Records) -> str:
             m = found.get((model, fmt))
             if not m:
                 continue
-            shares = [_f(100 * m["buckets"][b] / m["n"], 1, "%") for b in BUCKETS]
+            shares = [_f(100 * m["buckets"].get(b, 0) / m["n"], 1, "%") for b in BUCKETS]
             score = tasks(m4, m2_quality, model, fmt).get("gsm8k")
             rows.append(
                 [
                     model.split("/")[-1],
                     FORMAT_LABELS[fmt],
                     *shares,
-                    _f(m["mean_words"], 0),
+                    _f(100 * m["talks_past_answer"], 1, "%"),
+                    _f(100 * m["strict_accuracy"], 1, "%"),
                     _f(score, 1, "%"),
                 ]
             )
-    headers = ["Model", "Format", *(b.capitalize() for b in BUCKETS), "Words per answer", "Suite score"]
+    headers = [
+        "Model",
+        "Format",
+        *(b.capitalize() for b in BUCKETS),
+        "Talks past ####",
+        "Strict-match",
+        "Suite score (flexible)",
+    ]
     return markdown_table(headers, rows)
 
 
