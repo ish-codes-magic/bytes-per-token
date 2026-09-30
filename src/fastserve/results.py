@@ -13,6 +13,7 @@ Stdlib only: this module is also imported on the laptop, which has no ML package
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -77,7 +78,19 @@ def environment_info() -> dict[str, Any]:
         info["triton"] = triton.__version__
     except ImportError:
         pass
+    info.update(_package_versions("vllm", "transformers", "flashinfer-python", "lm_eval"))
     return info
+
+
+def _package_versions(*packages: str) -> dict[str, str]:
+    """Versions of installed packages (read from metadata, so nothing gets imported)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    found = {}
+    for package in packages:
+        with contextlib.suppress(PackageNotFoundError):  # not installed in this image
+            found[package.replace("-", "_")] = version(package)
+    return found
 
 
 def make_record(
