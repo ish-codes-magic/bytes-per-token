@@ -41,6 +41,27 @@ image = (
     .add_local_dir(REPO / "benchmarks", f"{REMOTE}/benchmarks")  # configs, prompts, model configs
 )
 
+# The serving image: vLLM pins its own PyTorch, so it gets its own environment (infra/serving.lock) instead of
+# changing the research image that M0/M1 were measured with.
+# It starts from NVIDIA's CUDA *devel* image: FlashInfer (used by vLLM, e.g. for sampling) compiles some
+# kernels on first use and needs nvcc plus a host C++ compiler, which slim images don't have.
+serving_image = (
+    modal.Image.from_registry("nvidia/cuda:13.0.1-devel-ubuntu24.04", add_python="3.12")
+    .apt_install("build-essential")
+    .uv_pip_install(requirements=[str(REPO / "infra" / "serving.lock")])
+    .env(
+        {
+            "PYTHONPATH": f"{REMOTE}/src",
+            "HF_HOME": f"{CACHE}/huggingface",
+            "VLLM_CACHE_ROOT": f"{CACHE}/vllm",  # torch.compile and CUDA-graph artifacts survive between runs
+            "FLASHINFER_WORKSPACE_BASE": f"{CACHE}/flashinfer",  # FlashInfer's compiled kernels, likewise
+        }
+    )
+    .workdir(REMOTE)
+    .add_local_dir(REPO / "src", f"{REMOTE}/src", ignore=["**/__pycache__"])
+    .add_local_dir(REPO / "benchmarks", f"{REMOTE}/benchmarks")
+)
+
 app = modal.App("bytes-per-token", image=image)
 hf_cache = modal.Volume.from_name("bpt-hf-cache", create_if_missing=True)
 
@@ -92,6 +113,42 @@ def m1_run(config_path: str, git: dict) -> list[dict]:
     config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
     prompts = json.loads(Path(REMOTE, config["prompts"]).read_text(encoding="utf-8"))
     return to_plain(run_m1(config, prompts, model_dir(config["model"]), git=git, config_path=config_path))
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=4, memory=32768, timeout=30 * 60, volumes={CACHE: hf_cache})
+def serving_smoke(model: str) -> dict:
+    """Start vLLM, send one streaming request, and report versions and timings."""
+    import json as _json
+    import time
+    import urllib.request
+    from importlib.metadata import version
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.serving.server import VLLMServer
+
+    server = VLLMServer(model_dir(model), served_name=model)
+    try:
+        server.start()
+    except (RuntimeError, TimeoutError) as err:
+        return {"error": str(err).splitlines()[0], "log": server.log_path.read_text(errors="replace")}
+    with server:  # already started; the context manager just guarantees stop()
+        payload = {"model": model, "prompt": "The capital of France is", "max_tokens": 16, "temperature": 0}
+        request = urllib.request.Request(
+            f"{server.url}/v1/completions",
+            data=_json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        start = time.perf_counter()
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = _json.loads(response.read())
+        hf_cache.commit()  # keep compile caches for next time
+        return {
+            "versions": {pkg: version(pkg) for pkg in ("vllm", "torch", "transformers", "lm_eval", "triton")},
+            "startup_s": server.startup_s,
+            "request_s": time.perf_counter() - start,
+            "text": body["choices"][0]["text"],
+            "log_tail": server.log_tail(25),
+        }
 
 
 @app.function(cpu=2, memory=4096, timeout=10 * 60)
@@ -155,6 +212,17 @@ def m1(config: str = "benchmarks/configs/m1_nanoserve.yaml") -> None:
     records = m1_run.remote(config, git)
     out = REPO / "results" / "raw" / "m1_nanoserve.jsonl"
     print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
+
+
+@app.local_entrypoint()
+def smoke(model: str = DEFAULT_MODEL) -> None:
+    result = serving_smoke.remote(model)
+    if "log" in result:  # startup failed: save the full vLLM log for diagnosis
+        (REPO / "vllm_smoke.log").write_text(result["log"], encoding="utf-8")
+        raise SystemExit(f"{result['error']} (full log in vllm_smoke.log)")
+    print(json.dumps({k: v for k, v in result.items() if k != "log_tail"}, indent=2))
+    print("--- vLLM log tail ---")
+    print(result["log_tail"])
 
 
 @app.local_entrypoint()
