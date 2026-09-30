@@ -78,7 +78,17 @@ def environment_info() -> dict[str, Any]:
         info["triton"] = triton.__version__
     except ImportError:
         pass
-    info.update(_package_versions("vllm", "transformers", "flashinfer-python", "lm_eval"))
+    info.update(
+        _package_versions(
+            "vllm",
+            "transformers",
+            "flashinfer-python",
+            "lm_eval",
+            "llmcompressor",
+            "compressed-tensors",
+            "datasets",
+        )
+    )
     return info
 
 
