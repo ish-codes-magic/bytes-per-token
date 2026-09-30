@@ -264,7 +264,7 @@ def m3_library(entry: dict, calibration: dict, config_path: str, run_id: str, gi
     return to_plain([record])
 
 
-@app.function(image=quant_image, gpu=GPU, cpu=4, memory=32768, timeout=150 * 60, volumes={CACHE: hf_cache})
+@app.function(image=quant_image, gpu=GPU, cpu=4, memory=65536, timeout=150 * 60, volumes={CACHE: hf_cache})
 def m4_checkpoint(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """llm-compressor makes one quantized checkpoint (compressed for vLLM, dense for nanoserve's KL)."""
     import yaml
@@ -619,12 +619,16 @@ def m3(config: str = "benchmarks/configs/m3_quant.yaml", tasks: str = "") -> Non
 
 @app.local_entrypoint()
 def m4(
-    config: str = "benchmarks/configs/m4_production.yaml", steps: str = "checkpoints,serving,suite,kl"
+    config: str = "benchmarks/configs/m4_production.yaml",
+    steps: str = "checkpoints,serving,suite,kl",
+    formats: str = "",
+    models: str = "",
 ) -> None:
     """M4: quantized checkpoints, then their servers, task scores and KL, each in its own container.
 
     BF16 servers start at once. Each checkpoint's server and task scores start as soon as it lands, and a
     model's KL run once all its formats exist. Without "checkpoints" in `steps`, they must exist already.
+    `formats` and `models` (comma-separated) re-run a subset, e.g. one format that failed.
     """
     from fastserve.results import append_jsonl, git_info, new_run_id
 
@@ -634,7 +638,9 @@ def m4(
     cfg = load_config.remote(config)
     wanted = set(steps.split(","))
     run_id, out = new_run_id(), REPO / "results" / "raw" / "m4_production.jsonl"
-    models, formats = cfg["checkpoints"]["models"], cfg["checkpoints"]["formats"]
+    formats_given = bool(formats)
+    models = models.split(",") if models else cfg["checkpoints"]["models"]
+    formats = formats.split(",") if formats else cfg["checkpoints"]["formats"]
     server = {(s["model"], s["label"]): s["name"] for s in cfg["servers"]}
     kl_task = {
         spec.get("model", cfg["model"]) if isinstance(spec, dict) else cfg["model"]: name
@@ -648,7 +654,7 @@ def m4(
         if "suite" in wanted:
             calls.append((f"suite {model} {fmt}", m4_suite.spawn(fmt, model, config, run_id, git)))
 
-    if "serving" in wanted:  # BF16 needs no checkpoint
+    if "serving" in wanted and not formats_given:  # BF16 needs no checkpoint
         for model in models:
             calls.append(
                 (f"serving {server[model, 'bf16']}", m2_run.spawn(config, git, [server[model, "bf16"]]))
