@@ -15,7 +15,8 @@ def perplexity_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]:
 
     from fastserve.quality.perplexity import evaluate, token_windows
 
-    text = "\n\n".join(load_dataset("wikitext", cfg["dataset"], split="test")["text"])
+    # huggingface_hub 1.x only accepts namespaced ids: "wikitext" now lives at "Salesforce/wikitext".
+    text = "\n\n".join(load_dataset(cfg["repo"], cfg["dataset"], split="test")["text"])
     ids = AutoTokenizer.from_pretrained(model_path)(text, add_special_tokens=False).input_ids
     windows = token_windows(ids, cfg["window"], cfg["max_windows"])
     model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16).cuda().eval()

@@ -2,6 +2,7 @@
 models: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B]
 
 perplexity:            # teacher-forced, on WikiText-2 (test split), in non-overlapping windows
+  repo: Salesforce/wikitext
   dataset: wikitext-2-raw-v1
   window: 2048
   max_windows: 40
