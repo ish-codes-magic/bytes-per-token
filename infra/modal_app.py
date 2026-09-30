@@ -8,6 +8,7 @@ From the repo root (the laptop's venv holds only `modal` and `ruff`):
     uv run --only-group local modal run infra/modal_app.py::figures     # figures -> results/figures/
     uv run --only-group local modal run infra/modal_app.py::fetch       # download model weights (once)
     uv run --only-group local modal run infra/modal_app.py::m1          # M1 nanoserve measurements
+    uv run --only-group local modal run infra/modal_app.py::m2          # M2 vLLM serving baselines
 
 The container image is built in the cloud from pyproject.toml + uv.lock and cached after the first build.
 Every function has a timeout, so a hung job can never eat the month's free credit.
@@ -151,6 +152,20 @@ def serving_smoke(model: str) -> dict:
         }
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=120 * 60, volumes={CACHE: hf_cache})
+def m2_run(config_path: str, git: dict) -> list[dict]:
+    import yaml
+
+    from fastserve.experiments.m2 import run_serving
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
+    records = run_serving(config, workloads, git=git, config_path=config_path)
+    hf_cache.commit()  # keep vLLM/FlashInfer compile caches for the next run
+    return to_plain(records)
+
+
 @app.function(cpu=2, memory=4096, timeout=10 * 60)
 def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, bytes]:
     """Draw one milestone's figures from its raw records; returns {file name: bytes}."""
@@ -223,6 +238,18 @@ def smoke(model: str = DEFAULT_MODEL) -> None:
     print(json.dumps({k: v for k, v in result.items() if k != "log_tail"}, indent=2))
     print("--- vLLM log tail ---")
     print(result["log_tail"])
+
+
+@app.local_entrypoint()
+def m2(config: str = "benchmarks/configs/m2_baseline.yaml") -> None:
+    from fastserve.results import append_jsonl, git_info
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    records = m2_run.remote(config, git)
+    out = REPO / "results" / "raw" / "m2_serving.jsonl"
+    print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
 
 
 @app.local_entrypoint()
