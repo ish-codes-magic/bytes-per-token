@@ -1,0 +1,18 @@
+# M2 follow-up: the engine held at saturation, watched through vLLM's own /metrics. Run:
+#   uv run --only-group local modal run infra/modal_app.py::m2 #     --config benchmarks/configs/m2_saturation.yaml --out m2_saturation.jsonl
+# The baseline sweep's "peak" is a whole-run average that includes ramp-up and drain. Here 512 closed-loop users
+# keep a queue waiting for ~2 minutes, so the plateau (requests waiting, engine full) measures capacity directly.
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80
+slo: {ttft_ms: 500, tpot_ms: 50}
+seed: 0
+
+servers:
+  - {label: vllm-bf16, model: Qwen/Qwen3-0.6B, args: [--no-enable-prefix-caching]}
+  - {label: vllm-bf16, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching]}
+
+loads:
+  saturation:
+    - {mode: closed, concurrency: 512}
+  shared_prefix:                        # the baseline's saturated point again, now with the server timeline
+    - {mode: open, rate: 16, requests: 300}

@@ -11,6 +11,11 @@ throughput:              # many users, ShareGPT-like mix: long-tailed prompts an
   output_len: {kind: lognormal, median: 192, sigma: 0.8, low: 16, high: 1024}
   num_requests: 512
 
+saturation:              # the same mix, enough requests to hold the engine full for about two minutes
+  input_len: {kind: lognormal, median: 256, sigma: 1.0, low: 16, high: 4096}
+  output_len: {kind: lognormal, median: 192, sigma: 0.8, low: 16, high: 1024}
+  num_requests: 2000
+
 long_8k:                 # RAG-style: a long retrieved context, a short answer
   input_len: 8192
   output_len: 64
