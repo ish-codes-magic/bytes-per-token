@@ -198,7 +198,7 @@ def long_context(records: Records) -> tuple[plt.Figure, str]:
     return fig, caption
 
 
-FIGURES = {
+FIGURES = {  # figures drawn from the baseline sweep alone
     "m2_pareto": pareto,
     "m2_goodput": goodput,
     "m2_cdfs": cdfs,
@@ -264,3 +264,57 @@ def make_quality(quality_records: Records, out_dir: str | Path) -> list[Path]:
     apply_style()
     fig, caption = needle_heatmaps(quality_records)
     return save_figure(fig, "m2_needle", caption, out_dir)
+
+
+def saturation(records: Records, configs: dict[str, Any], bandwidth: float) -> tuple[plt.Figure, str]:
+    """The engine held full, seen through its own counters, vs the memory-bound ceiling at each moment."""
+    from fastserve.hw.analysis import metrics_of
+    from fastserve.report.m2 import memory_bound_step_s, saturation_run
+
+    m, p = saturation_run(records, SMALL, "saturation")
+    cfg = configs[SMALL]
+    capacity = next(s for s in metrics_of(records, "server_start") if s["model"] == SMALL)["kv_cache_tokens"]
+    table = m["server_timeline"]
+    keys = ("t", "running", "waiting", "kv_usage", "generation_tokens")
+    idx = [table["columns"].index(k) for k in keys]
+    rows = np.array([[row[i] for i in idx] for row in table["rows"] if all(row[i] is not None for i in idx)])
+    t, running, waiting, kv_usage, generated = rows.T
+    k = max(1, round(1.0 / np.median(np.diff(t))))  # rates over ~1 s: counters are too coarse per sample
+    rate_t, rate = (t[k:] + t[:-k]) / 2, (generated[k:] - generated[:-k]) / (t[k:] - t[:-k])
+    ceiling = running / np.array([memory_bound_step_s(u * capacity, cfg, bandwidth) for u in kv_usage])
+
+    fig, (top, bottom) = plt.subplots(2, 1, sharex=True, figsize=(9, 6), height_ratios=[3, 2])
+    queued = t[waiting > 0]
+    for ax in (top, bottom):
+        ax.axvspan(queued.min(), queued.max(), color=OKABE_ITO["yellow"], alpha=0.15, lw=0)
+    top.plot(t, ceiling, color=BASELINE_GRAY, ls="--", label="memory-bound ceiling (live KV cache + weights)")
+    top.plot(rate_t, rate, color=OKABE_ITO["blue"], label="measured (server counters, 1 s windows)")
+    top.set(ylabel="output tokens/s", title="Qwen3-0.6B held at saturation (shaded: requests waiting)")
+    top.set_ylim(bottom=0)
+    top.legend(loc="lower center", fontsize=8)
+    bottom.plot(t, running, color=OKABE_ITO["blue"], label="running")
+    bottom.plot(t, waiting, color=OKABE_ITO["orange"], label="waiting")
+    bottom.set(xlabel="time since the load started (s)", ylabel="requests")
+    kv_axis = bottom.twinx()
+    kv_axis.plot(t, 100 * kv_usage, color=OKABE_ITO["green"], ls=":", label="KV cache used (%)")
+    kv_axis.set(ylabel="KV cache used (%)", ylim=(0, 105))
+    kv_axis.grid(False)
+    handles = bottom.get_legend_handles_labels()[0] + kv_axis.get_legend_handles_labels()[0]
+    bottom.legend(handles=handles, loc="center right", fontsize=8)
+
+    kv_tokens = p["kv_usage"] * capacity
+    share = p["output_tok_s"] / (p["running"] / memory_bound_step_s(kv_tokens, cfg, bandwidth))
+    caption = (
+        f"Held full for {p['seconds']:.0f} s, Qwen3-0.6B decodes {p['output_tok_s']:,.0f} tokens/s with "
+        f"{p['running']:.0f} sequences running: {share:.0%} of the memory-bound ceiling "
+        "set by its live KV cache."
+    )
+    return fig, caption
+
+
+def make_saturation(
+    records: Records, configs: dict[str, Any], bandwidth: float, out_dir: str | Path
+) -> list[Path]:
+    apply_style()
+    fig, caption = saturation(records, configs, bandwidth)
+    return save_figure(fig, "m2_saturation", caption, out_dir)
