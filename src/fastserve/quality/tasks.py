@@ -17,6 +17,16 @@ DEFAULT_SUITE = [
 ]
 
 
+def _model_args(model_path: str, max_model_len: int) -> dict[str, Any]:
+    """The same vLLM settings for every configuration, so scores differ only by the checkpoint."""
+    return {
+        "pretrained": model_path,
+        "dtype": "bfloat16",
+        "gpu_memory_utilization": 0.8,
+        "max_model_len": max_model_len,
+    }
+
+
 def run_suite(
     model_path: str, suite: list[tuple] | None = None, *, max_model_len: int = 4096
 ) -> dict[str, Any]:
@@ -25,17 +35,11 @@ def run_suite(
 
     # HumanEval executes the generated code, which is acceptable inside this throwaway container.
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
-    model_args = {
-        "pretrained": model_path,
-        "dtype": "bfloat16",
-        "gpu_memory_utilization": 0.8,
-        "max_model_len": max_model_len,
-    }
     scores: dict[str, Any] = {}
     for task, shots, limit, metric in suite or DEFAULT_SUITE:
         out = lm_eval.simple_evaluate(
             model="vllm",
-            model_args=model_args,
+            model_args=_model_args(model_path, max_model_len),
             tasks=[task],
             num_fewshot=shots,
             limit=limit,
@@ -58,3 +62,25 @@ def run_suite(
             ),
         }
     return scores
+
+
+def gsm8k_failures(model_path: str, *, max_model_len: int = 4096) -> dict[str, Any]:
+    """GSM8K exactly as the suite runs it, but with every answer logged and sorted into failure buckets."""
+    import lm_eval
+
+    from fastserve.quality.gsm8k import summarize
+
+    task, shots, limit, _ = DEFAULT_SUITE[0]
+    out = lm_eval.simple_evaluate(
+        model="vllm",
+        model_args=_model_args(model_path, max_model_len),
+        tasks=[task],
+        num_fewshot=shots,
+        limit=limit,
+        log_samples=True,
+        random_seed=0,
+        numpy_random_seed=0,
+        torch_random_seed=0,
+        fewshot_random_seed=0,
+    )
+    return summarize(out["samples"][task])
