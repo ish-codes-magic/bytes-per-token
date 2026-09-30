@@ -18,12 +18,9 @@ from fastserve.serving.server import VLLMServer
 from fastserve.serving.server_metrics import sample_server
 from fastserve.serving.workloads import RequestSpec, Workload
 
-# Settings vLLM chooses at startup and prints: how many tokens of KV cache fit after loading the weights, and
-# how many tokens one engine step may process (the chunked-prefill budget, shared by prefills and decodes).
-_FROM_LOG = {
-    "kv_cache_tokens": re.compile(r"GPU KV cache size: ([\d,]+) tokens"),
-    "max_num_batched_tokens": re.compile(r"max_num_batched_tokens=([\d,]+)"),
-}
+# Settings vLLM chooses at startup and prints: how many tokens of KV cache fit after loading the weights.
+# (Its per-step token budget isn't in the 0.30 log; the server timeline measures it instead.)
+_FROM_LOG = {"kv_cache_tokens": re.compile(r"GPU KV cache size: ([\d,]+) tokens")}
 
 
 def _from_log(server: VLLMServer) -> dict[str, int | None]:
