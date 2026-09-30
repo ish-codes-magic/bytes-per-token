@@ -1,5 +1,8 @@
 # Gate Report: M1, nanoserve
 
+> **Gate decision (2026-09-30):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.1-nanoserve`.
+
 ## What was built
 
 - **nanoserve** ([`src/fastserve/engine/`](../../src/fastserve/engine/)), a readable Qwen3 inference engine in

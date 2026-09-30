@@ -78,3 +78,4 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     not by matmuls. That's the FlashAttention motivation, measured.
   - A unit test corrected my intuition: at batch 64 × 128 tokens, Qwen3-0.6B's KV cache (~0.94 GB) is nearly as
     big as its weights, so decode intensity is well below "≈ batch size".
+- **Gate M1 approved** (questions deferred by the owner). Tagged `v0.1-nanoserve`.
