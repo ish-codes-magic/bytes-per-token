@@ -89,7 +89,7 @@ def test_plateau_uses_only_intervals_with_a_queue(m2_saturation_records):
     assert p["step_ms"] == pytest.approx(50) and p["running"] == 200 and p["kv_usage"] == 0.5
 
 
-def test_saturation_table_compares_measured_steps_with_streaming_the_bytes(m2_saturation_records):
+def test_saturation_table_compares_throughput_with_streaming_the_bytes(m2_saturation_records):
     from fastserve.report.m2 import saturation_table
 
     cfg = _qwen3_small()
@@ -97,8 +97,17 @@ def test_saturation_table_compares_measured_steps_with_streaming_the_bytes(m2_sa
     # half of 100,000 cached tokens across 200 sequences; each step streams the weights plus that KV
     step_s = (2 * cfg.num_params() + 50_000 * cfg.kv_bytes_per_token()) / 262e9
     ratio = 4000 / (200 / step_s)
-    assert "| Qwen3-0.6B | 8 | 200 | 250 |" in table and "| 50.0 | 4,000 |" in table
+    # token-weighted context of 256-token prompts with 192-token answers: 256 + 191/2
+    assert "| Qwen3-0.6B | 8 | 200 | 352 / 250 | 50% | 4,000 |" in table
     assert table.rstrip().endswith(f"| {ratio:.0%} |")
+
+
+def test_decode_efficiency_puts_one_sequence_next_to_the_saturated_engine(m2_records, m2_saturation_records):
+    from fastserve.report.m2 import decode_efficiency_table
+
+    table = decode_efficiency_table(m2_records, m2_saturation_records, {SMALL: _qwen3_small()}, 262e9)
+    assert "| Qwen3-0.6B | 1 | 124 |" in table  # chat: 100-token prompts + half of 50 output tokens
+    assert "| Qwen3-0.6B | 200 | 250 |" in table and "| 50.0 |" in table  # 200 sequences at 4,000 tok/s
 
 
 def test_peak_definition_contrasts_the_sweep_average_with_the_plateau(m2_records, m2_saturation_records):
@@ -108,12 +117,12 @@ def test_peak_definition_contrasts_the_sweep_average_with_the_plateau(m2_records
     # 10 requests, 0.1 s apart, each decoding for 1 s: at most 10 overlap, fewer during ramp-up and drain
     assert 0 < mean_decoding(sweep["requests"]) < 10
     table = peak_definition_table(m2_records, m2_saturation_records)
-    assert "| Qwen3-0.6B | 4,000 (64 users) |" in table and "| 4,000 | 200 | 1.0× |" in table
+    assert "| Qwen3-0.6B | 4,000 (64 users) |" in table and table.splitlines()[2].endswith("| 4,000 | 200 |")
 
 
 def test_prefill_budget_predicts_the_batch_with_littles_law(m2_saturation_records):
     from fastserve.report.m2 import prefill_budget_table
 
     table = prefill_budget_table(m2_saturation_records)
-    # R = B·O / (P + O) = 2048 × 64 / (2112 + 64) ≈ 60, and each 100 ms step carries 1,988 prompt tokens
-    assert "| Qwen3-0.6B | 2,048 | 2,112 + 64 | 60 | 60 | 1,988 | 100 | 9.4 |" in table
+    # a 100 ms step carries 1,988 prompt + 60 output tokens: R = B·O / (P + O) = 2048 × 64 / 2176 ≈ 60
+    assert "| Qwen3-0.6B | 2,048 | 2,112 + 64 | 60 | 60 | 100 | 9.4 |" in table

@@ -25,6 +25,7 @@ from fastserve.report.m1 import m1_observables, parity_table, profile_table, spe
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
     SMALL,
+    decode_efficiency_table,
     load_table,
     long_context_table,
     m2_observables,
@@ -98,6 +99,7 @@ def build_blocks() -> dict[str, str]:
             bandwidth = measured_bandwidth(latest_run(read_jsonl(probe)))
             blocks["m2_peak_definition"] = peak_definition_table(m2, sat)
             blocks["m2_saturation"] = saturation_table(sat, configs, bandwidth)
+            blocks["m2_decode_efficiency"] = decode_efficiency_table(m2, sat, configs, bandwidth)
             blocks["m2_prefill_budget"] = prefill_budget_table(sat)
         offline = REPO / "results" / "raw" / "m2_offline.jsonl"
         if offline.exists():

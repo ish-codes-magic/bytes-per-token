@@ -363,7 +363,6 @@ def m2_saturation_records() -> list[dict[str, Any]]:
             "model": model,
             "label": "vllm-bf16",
             "kv_cache_tokens": 100_000,
-            "max_num_batched_tokens": 2048,
         }
         records.append(rec("server_start", start))
         saturated = [
