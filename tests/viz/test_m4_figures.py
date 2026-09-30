@@ -24,4 +24,6 @@ def test_m4_figures_are_written_with_one_line_captions(m4_records, tmp_path):
     captions = {p.name: p.read_text(encoding="utf-8") for p in written if p.suffix == ".txt"}
     assert len(captions) == 4 and all(c.count("\n") == 1 for c in captions.values())
     assert "FP8 overtakes it from batch 256" in captions["m4_speedup_vs_batch.caption.txt"]
-    assert "Qwen3-0.6B: FP8 W8A8 -17%" in captions["m4_waterfall.caption.txt"]  # 1 / 1.2 − 1
+    # batch 1: INT4 is 2× faster (cost −50%); saturated: FP8 is 1.2× (cost −17%)
+    assert "by 50% for one user (INT4 W4A16 (GPTQ))" in captions["m4_waterfall.caption.txt"]
+    assert "by 17% on a saturated server (FP8 W8A8)" in captions["m4_waterfall.caption.txt"]

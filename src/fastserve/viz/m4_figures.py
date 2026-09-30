@@ -145,7 +145,7 @@ def memory_budget(m4_records: Records) -> tuple[plt.Figure, str]:
     )
     ax.invert_yaxis()
     ax.set(xlabel="GPU memory (GiB)")
-    ax.legend(fontsize=8, loc="lower right")
+    ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=3, frameon=False)
     freed = {r[0]: r[2] for r in rows}
     small = [r for r in rows if r[0].startswith("Qwen3-1.7B")]
     caption = "Smaller weights hand their memory to the KV cache"
@@ -160,24 +160,36 @@ def memory_budget(m4_records: Records) -> tuple[plt.Figure, str]:
     return fig, caption + "."
 
 
-def waterfall(m4: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figure, str]:
-    """Waterfall v1: $ per 1M output tokens at saturation: BF16, then each format as a change from it."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
-    lines = []
-    for ax, model in zip(axes, (SMALL, LARGE), strict=True):
-        costs = {}
-        for fmt in FORMATS:
+def _costs(m4: Records, model: str, regime: str, dollars_per_hour: float) -> dict[str, float]:
+    """$ per 1M output tokens per format: one user (the chat workload) or the saturated server."""
+    costs = {}
+    for fmt in FORMATS:
+        if regime == "one user":
+            m = serving(m4, model, fmt, "chat")
+            tok_s = m["summary"].get("output_throughput") if m else None
+        else:
             sat = saturated(m4, model, fmt)
-            if sat:
-                costs[fmt] = dollars_per_hour / (sat["output_tok_s"] * 3600) * 1e6
-        if "bf16" not in costs:
-            continue
-        base = costs["bf16"]
-        names = list(costs)
-        for i, fmt in enumerate(names):
-            if fmt == "bf16":
-                ax.bar(i, base, color=BASELINE_GRAY)
-            else:
+            tok_s = sat["output_tok_s"] if sat else None
+        if tok_s:
+            costs[fmt] = dollars_per_hour / (tok_s * 3600) * 1e6
+    return costs
+
+
+def waterfall(m4: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figure, str]:
+    """Waterfall v1: $ per 1M output tokens, BF16 then each format as a change from it, for one user and for
+    a saturated server."""
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7.5))
+    best: dict[tuple[str, str], tuple[str, float]] = {}
+    for row, regime in enumerate(("one user", "saturated")):
+        for col, model in enumerate((SMALL, LARGE)):
+            ax, costs = axes[row, col], _costs(m4, model, regime, dollars_per_hour)
+            if "bf16" not in costs:
+                continue
+            base, names = costs["bf16"], list(costs)
+            for i, fmt in enumerate(names):
+                if fmt == "bf16":
+                    ax.bar(i, base, color=BASELINE_GRAY)
+                    continue
                 delta = costs[fmt] - base
                 ax.bar(
                     i, delta, bottom=base, color=OKABE_ITO["green"] if delta < 0 else OKABE_ITO["vermillion"]
@@ -185,12 +197,21 @@ def waterfall(m4: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figure, 
                 ax.annotate(
                     f"{delta / base:+.0%}", (i, max(base, costs[fmt])), ha="center", va="bottom", fontsize=8
                 )
-        ax.set_xticks(range(len(names)), [FORMAT_LABELS[f].replace(" (", "\n(") for f in names], fontsize=8)
-        ax.set(title=model.split("/")[-1], ylabel="$ per 1M output tokens (saturated)")
-        ax.set_ylim(0, max(costs.values()) * 1.15)
-        best = min(costs, key=costs.get)
-        lines.append(f"{model.split('/')[-1]}: {FORMAT_LABELS[best]} {(costs[best] / base - 1):+.0%}")
-    caption = "At saturation the cheapest format per model is " + "; ".join(lines) + " versus BF16."
+            ax.set_xticks(
+                range(len(names)), [FORMAT_LABELS[f].replace(" (", "\n(") for f in names], fontsize=8
+            )
+            ax.set(title=f"{model.split('/')[-1]}, {regime}", ylabel="$ per 1M output tokens")
+            ax.set_ylim(0, max(costs.values()) * 1.15)
+            cheapest = min(costs, key=costs.get)
+            best[model, regime] = (FORMAT_LABELS[cheapest], costs[cheapest] / base - 1)
+    fig.tight_layout()
+    one, sat = best.get((LARGE, "one user")), best.get((LARGE, "saturated"))
+    if not one or not sat:
+        return fig, "Not every regime was measured."
+    caption = (
+        f"On Qwen3-1.7B the cheapest format cuts $ per 1M tokens by {-one[1]:.0%} for one user ({one[0]}) "
+        f"but by {-sat[1]:.0%} on a saturated server ({sat[0]}), where the KV cache dominates every step."
+    )
     return fig, caption
 
 
