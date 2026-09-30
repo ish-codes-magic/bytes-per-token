@@ -69,6 +69,20 @@ not the weights, dominate the bytes.
 | TPOT at 32k context ÷ chat TPOT, 0.6B | **2–4×** | Each step reads 1.19 GB of weights + 3.7 GB of KV (vs ~0.01 GB of KV in chat) |
 | Peak request rate, shared-prefix workload, 0.6B, no prefix caching | **12–25 req/s** | Every request re-prefills 2,048 shared tokens (~1.8 TFLOP ≈ 36 ms of compute) |
 
+### Quality baselines (predicted before the quality run)
+
+BF16 is the reference: these numbers aren't "good" or "bad" on their own. They're the bar every later
+optimization must not fall below. The ranges are wide because they come from what's typical for models of this
+size, not from measurements.
+
+| Quantity | Prediction |
+|---|---|
+| WikiText-2 perplexity (2,048-token windows) | 0.6B: **12–30**; 1.7B: **9–20** |
+| GSM8K 5-shot | 0.6B: **25–55%**; 1.7B: **50–75%** |
+| MMLU 5-shot (20 questions per subject) | 0.6B: **35–55%**; 1.7B: **50–65%** |
+| HumanEval pass@1 | 0.6B: **10–40%**; 1.7B: **25–55%** |
+| Needle-in-a-haystack pass rate, 1k–32k tokens | 0.6B: **70–100%**; 1.7B: **85–100%** |
+
 ## 5. Result
 
 *(Filled in by generated tables after the run.)*

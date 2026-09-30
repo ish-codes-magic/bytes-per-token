@@ -1,0 +1,17 @@
+{
+  "milestone": "M2 (quality)",
+  "written_in_commit": "PENDING",
+  "note": "Written before running the quality baselines. Wide ranges: prior knowledge of similar-sized models, not measurements. Reasoning in docs/learning/M2-baselines.md, section 4.",
+  "predictions": [
+    {"id": "ppl_small", "label": "WikiText-2 perplexity, Qwen3-0.6B", "low": 12, "high": 30},
+    {"id": "ppl_large", "label": "WikiText-2 perplexity, Qwen3-1.7B", "low": 9, "high": 20},
+    {"id": "gsm8k_small", "label": "GSM8K 5-shot, Qwen3-0.6B (%)", "low": 25, "high": 55},
+    {"id": "gsm8k_large", "label": "GSM8K 5-shot, Qwen3-1.7B (%)", "low": 50, "high": 75},
+    {"id": "mmlu_small", "label": "MMLU 5-shot slice, Qwen3-0.6B (%)", "low": 35, "high": 55},
+    {"id": "mmlu_large", "label": "MMLU 5-shot slice, Qwen3-1.7B (%)", "low": 50, "high": 65},
+    {"id": "humaneval_small", "label": "HumanEval pass@1, Qwen3-0.6B (%)", "low": 10, "high": 40},
+    {"id": "humaneval_large", "label": "HumanEval pass@1, Qwen3-1.7B (%)", "low": 25, "high": 55},
+    {"id": "needle_small", "label": "Needle pass rate up to 32k, Qwen3-0.6B (%)", "low": 70, "high": 100},
+    {"id": "needle_large", "label": "Needle pass rate up to 32k, Qwen3-1.7B (%)", "low": 85, "high": 100}
+  ]
+}
