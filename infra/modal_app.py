@@ -264,6 +264,41 @@ def m3_library(entry: dict, calibration: dict, config_path: str, run_id: str, gi
     return to_plain([record])
 
 
+@app.function(image=quant_image, gpu=GPU, cpu=4, memory=32768, timeout=150 * 60, volumes={CACHE: hf_cache})
+def m4_checkpoint(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """llm-compressor makes one quantized checkpoint (compressed for vLLM, dense for nanoserve's KL)."""
+    import yaml
+
+    from fastserve.experiments.m4_checkpoints import make_checkpoint
+    from fastserve.results import environment_info, make_record, to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    info = make_checkpoint(fmt, model, config["calibration"])
+    hf_cache.commit()  # the other containers read the checkpoint from the Volume
+    meta = {"path": config_path, "calibration": config["calibration"]}
+    return to_plain(
+        [make_record("m4_checkpoint", info, run_id=run_id, config=meta, git=git, env=environment_info())]
+    )
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=90 * 60, volumes={CACHE: hf_cache})
+def m4_suite(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """M2's lm-eval suite on one quantized checkpoint, served by vLLM with its real low-bit kernels."""
+    import yaml
+
+    from fastserve.experiments.m2_quality import tasks_task
+    from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
+    from fastserve.results import environment_info, make_record, to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    path = f"{CHECKPOINT_DIR}/{model.split('/')[-1]}-{fmt}"
+    metrics = {"model": model, "format": fmt, **tasks_task(path, config["suite"])}
+    meta = {"path": config_path, "suite": config["suite"]}
+    return to_plain(
+        [make_record("m4_tasks", metrics, run_id=run_id, config=meta, git=git, env=environment_info())]
+    )
+
+
 @app.function(cpu=2, memory=8192, timeout=20 * 60, volumes={CACHE: hf_cache})
 def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
     """Load a little of every calibration/evaluation source, so a missing dataset fails fast and cheaply."""
@@ -565,3 +600,66 @@ def m3(config: str = "benchmarks/configs/m3_quant.yaml", tasks: str = "") -> Non
             print(f"{task}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}")
         except Exception as err:  # keep what the other tasks produced
             print(f"{task} FAILED: {type(err).__name__}: {err}")
+
+
+@app.local_entrypoint()
+def m4(
+    config: str = "benchmarks/configs/m4_production.yaml", steps: str = "checkpoints,serving,suite,kl"
+) -> None:
+    """M4: quantized checkpoints, then their servers, task scores and KL, each in its own container.
+
+    BF16 servers start at once. Each checkpoint's server and task scores start as soon as it lands, and a
+    model's KL run once all its formats exist. Without "checkpoints" in `steps`, they must exist already.
+    """
+    from fastserve.results import append_jsonl, git_info, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    cfg = load_config.remote(config)
+    wanted = set(steps.split(","))
+    run_id, out = new_run_id(), REPO / "results" / "raw" / "m4_production.jsonl"
+    models, formats = cfg["checkpoints"]["models"], cfg["checkpoints"]["formats"]
+    server = {(s["model"], s["label"]): s["name"] for s in cfg["servers"]}
+    kl_task = {
+        spec.get("model", cfg["model"]) if isinstance(spec, dict) else cfg["model"]: name
+        for name, spec in cfg["tasks"].items()
+    }
+    calls: list[tuple[str, object]] = []
+
+    def dependents(model: str, fmt: str) -> None:
+        if "serving" in wanted:
+            calls.append((f"serving {server[model, fmt]}", m2_run.spawn(config, git, [server[model, fmt]])))
+        if "suite" in wanted:
+            calls.append((f"suite {model} {fmt}", m4_suite.spawn(fmt, model, config, run_id, git)))
+
+    if "serving" in wanted:  # BF16 needs no checkpoint
+        for model in models:
+            calls.append(
+                (f"serving {server[model, 'bf16']}", m2_run.spawn(config, git, [server[model, "bf16"]]))
+            )
+    if "checkpoints" in wanted:
+        made = {(m, f): m4_checkpoint.spawn(f, m, config, run_id, git) for m in models for f in formats}
+        ready = dict.fromkeys(models, 0)
+        for (model, fmt), call in made.items():
+            try:
+                records = call.get()
+            except Exception as err:  # its dependents can't run; everything else still can
+                print(f"checkpoint {model} {fmt} FAILED: {type(err).__name__}: {err}")
+                continue
+            print(f"checkpoint {model} {fmt}: {records[0]['metrics']} ({append_jsonl(out, records)} record)")
+            dependents(model, fmt)
+            ready[model] += 1
+            if "kl" in wanted and ready[model] == len(formats):
+                calls.append((f"kl {model}", m3_task.spawn(kl_task[model], config, run_id, git)))
+    else:
+        for model in models:
+            for fmt in formats:
+                dependents(model, fmt)
+            if "kl" in wanted:
+                calls.append((f"kl {model}", m3_task.spawn(kl_task[model], config, run_id, git)))
+    for what, call in calls:
+        try:
+            print(f"{what}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}")
+        except Exception as err:
+            print(f"{what} FAILED: {type(err).__name__}: {err}")
