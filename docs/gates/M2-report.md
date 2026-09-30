@@ -1,6 +1,7 @@
 # Gate Report: M2, baselines and the measurement harness
 
-> **Gate decision:** pending. The explain-it-back questions below are for later study; M3 can start on approval.
+> **Gate decision (2026-09-30):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.2-baselines`.
 
 ## What was built
 
