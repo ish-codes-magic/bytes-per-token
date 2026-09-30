@@ -304,14 +304,14 @@ def smoke(model: str = DEFAULT_MODEL) -> None:
 
 
 @app.local_entrypoint()
-def m2(config: str = "benchmarks/configs/m2_baseline.yaml") -> None:
+def m2(config: str = "benchmarks/configs/m2_baseline.yaml", out: str = "m2_serving.jsonl") -> None:
     from fastserve.results import append_jsonl, git_info
 
     git = git_info(REPO)
     if git["dirty"]:
         print("warning: uncommitted changes; these results will be flagged as dirty")
     records = m2_run.remote(config, git)
-    out = REPO / "results" / "raw" / "m2_serving.jsonl"
+    out = REPO / "results" / "raw" / out
     print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
 
 
