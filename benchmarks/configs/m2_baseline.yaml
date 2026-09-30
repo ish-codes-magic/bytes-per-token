@@ -1,0 +1,43 @@
+# M2: stock vLLM (BF16) baselines on the L4. Run: uv run --only-group local modal run infra/modal_app.py::m2
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80          # Modal's L4 price, for $ per 1M output tokens
+slo: {ttft_ms: 500, tpot_ms: 50} # an interactive-chat service level: goodput counts only requests meeting both
+seed: 0
+
+servers:
+  # Prefix caching is OFF: vLLM enables it by default, but it's a technique we add ourselves in M5.
+  - {label: vllm-bf16, model: Qwen/Qwen3-0.6B, args: [--no-enable-prefix-caching]}
+  - {label: vllm-bf16, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching]}
+
+# Load points per workload. `requests` caps how many of the workload's requests a point sends.
+loads:
+  chat:
+    - {mode: closed, concurrency: 1}
+  throughput:
+    - {mode: open, rate: 1, requests: 40}
+    - {mode: open, rate: 2, requests: 80}
+    - {mode: open, rate: 4, requests: 160}
+    - {mode: open, rate: 8, requests: 300}
+    - {mode: open, rate: 12, requests: 300}
+    - {mode: open, rate: 16, requests: 300}
+    - {mode: open, rate: 20, requests: 300}
+    - {mode: open, rate: 24, requests: 300}
+    - {mode: open, rate: 32, requests: 300}
+    - {mode: closed, concurrency: 1, requests: 20}
+    - {mode: closed, concurrency: 8, requests: 64}
+    - {mode: closed, concurrency: 32, requests: 128}
+    - {mode: closed, concurrency: 128, requests: 256}
+    - {mode: closed, concurrency: 256, requests: 512}
+  long_8k:
+    - {mode: closed, concurrency: 1}
+  long_16k:
+    - {mode: closed, concurrency: 1}
+  long_32k:
+    - {mode: closed, concurrency: 1}
+  shared_prefix:
+    - {mode: open, rate: 2, requests: 60}
+    - {mode: open, rate: 4, requests: 120}
+    - {mode: open, rate: 8, requests: 200}
+    - {mode: open, rate: 12, requests: 300}
+    - {mode: open, rate: 16, requests: 300}
+    - {mode: open, rate: 24, requests: 300}

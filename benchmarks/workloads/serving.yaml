@@ -1,0 +1,31 @@
+# Serving workloads (read by fastserve.serving.workloads.Workload.from_config).
+# Prompts are seeded random token ids; outputs are forced to an exact length (ignore_eos).
+
+chat:                    # one user chatting: short prompts, medium answers
+  input_len: {kind: lognormal, median: 100, sigma: 0.8, low: 16, high: 512}
+  output_len: 256
+  num_requests: 30
+
+throughput:              # many users, ShareGPT-like mix: long-tailed prompts and answers
+  input_len: {kind: lognormal, median: 256, sigma: 1.0, low: 16, high: 4096}
+  output_len: {kind: lognormal, median: 192, sigma: 0.8, low: 16, high: 1024}
+  num_requests: 512
+
+long_8k:                 # RAG-style: a long retrieved context, a short answer
+  input_len: 8192
+  output_len: 64
+  num_requests: 8
+long_16k:
+  input_len: 16384
+  output_len: 64
+  num_requests: 8
+long_32k:
+  input_len: 32768
+  output_len: 64
+  num_requests: 6
+
+shared_prefix:           # an agent: a long shared system prompt + tools, then short turns
+  shared_prefix_len: 2048
+  input_len: {kind: lognormal, median: 64, sigma: 0.7, low: 8, high: 256}
+  output_len: 64
+  num_requests: 300
