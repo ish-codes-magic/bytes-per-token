@@ -326,6 +326,22 @@ def m4_fidelity(fmt: str, model: str, config_path: str, run_id: str, git: dict) 
     return to_plain([record])
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m4_gsm8k(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """GSM8K for one format with every answer logged, sorted into failure buckets."""
+    from fastserve.engine.loader import model_dir
+    from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
+    from fastserve.quality.tasks import gsm8k_failures
+    from fastserve.results import environment_info, make_record, to_plain
+
+    hf_cache.reload()
+    path = model_dir(model) if fmt == "bf16" else f"{CHECKPOINT_DIR}/{model.split('/')[-1]}-{fmt}"
+    metrics = {"model": model, "format": fmt, **gsm8k_failures(path)}
+    meta = {"path": config_path}
+    record = make_record("m4_gsm8k", metrics, run_id=run_id, config=meta, git=git, env=environment_info())
+    return to_plain([record])
+
+
 @app.function(cpu=2, memory=8192, timeout=20 * 60, volumes={CACHE: hf_cache})
 def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
     """Load a little of every calibration/evaluation source, so a missing dataset fails fast and cheaply."""
@@ -346,6 +362,28 @@ def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
             found[name] = f"{type(err).__name__}: {err}"
     hf_cache.commit()  # keep the downloaded shards for the real runs
     return found
+
+
+@app.function(image=serving_image, cpu=2, memory=8192, timeout=15 * 60)
+def eval_library_facts() -> str:
+    """How the installed lm-evaluation-harness logs samples and scores GSM8K, read before relying on it."""
+    import inspect
+    import re
+    from importlib.metadata import version
+    from pathlib import Path
+
+    import lm_eval
+    import lm_eval.evaluator as evaluator
+
+    lines = [f"lm_eval {version('lm_eval')}"]
+    source = inspect.getsource(evaluator)
+    for match in re.finditer(
+        r"^.*(filtered_resps|\"filter\"|\"doc_id\"|\"resps\"|\"target\").*$", source, re.M
+    ):
+        lines.append(match.group(0).rstrip())
+    tasks = Path(lm_eval.__file__).parent / "tasks" / "gsm8k"
+    lines.append((tasks / "gsm8k.yaml").read_text(encoding="utf-8"))
+    return "\n".join(lines)
 
 
 @app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60)
@@ -647,7 +685,7 @@ def m3(config: str = "benchmarks/configs/m3_quant.yaml", tasks: str = "") -> Non
 @app.local_entrypoint()
 def m4(
     config: str = "benchmarks/configs/m4_production.yaml",
-    steps: str = "checkpoints,serving,suite,kl,fidelity",
+    steps: str = "checkpoints,serving,suite,kl,fidelity,gsm8k",
     formats: str = "",
     models: str = "",
 ) -> None:
@@ -682,6 +720,8 @@ def m4(
             calls.append((f"suite {model} {fmt}", m4_suite.spawn(fmt, model, config, run_id, git)))
         if "fidelity" in wanted:
             calls.append((f"fidelity {model} {fmt}", m4_fidelity.spawn(fmt, model, config, run_id, git)))
+        if "gsm8k" in wanted:
+            calls.append((f"gsm8k {model} {fmt}", m4_gsm8k.spawn(fmt, model, config, run_id, git)))
 
     for model in [] if formats_given else models:  # BF16 needs no checkpoint
         if "serving" in wanted:
@@ -690,6 +730,8 @@ def m4(
             )
         if "fidelity" in wanted:
             calls.append((f"fidelity {model} bf16", m4_fidelity.spawn("bf16", model, config, run_id, git)))
+        if "gsm8k" in wanted:
+            calls.append((f"gsm8k {model} bf16", m4_gsm8k.spawn("bf16", model, config, run_id, git)))
     if "checkpoints" in wanted:
         made = {(m, f): m4_checkpoint.spawn(f, m, config, run_id, git) for m in models for f in formats}
         ready = dict.fromkeys(models, 0)
