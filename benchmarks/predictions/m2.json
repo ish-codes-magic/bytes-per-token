@@ -1,6 +1,6 @@
 {
   "milestone": "M2",
-  "written_in_commit": "PENDING",
+  "written_in_commit": "19c9be1",
   "note": "Written before running the vLLM baselines. Reasoning is in docs/learning/M2-baselines.md, section 4.",
   "predictions": [
     {"id": "chat_tpot_ms", "label": "Chat TPOT p50, Qwen3-0.6B (ms)", "low": 5.5, "high": 8},
