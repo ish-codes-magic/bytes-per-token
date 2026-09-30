@@ -176,3 +176,36 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   with more container RAM.
 - **Not done: publishing checkpoints.** AGENTS.md asks for Hugging Face uploads with model cards. Publishing is
   outward-facing and needs the owner's account, so the checkpoints stay on the Modal Volume until they decide.
+- **Dead end: servers couldn't see new checkpoints.** Half the quantized servers failed with vLLM's
+  `validate_repo_id` on `/cache/m4/...` paths that existed. Modal reuses warm containers, and a reused
+  container keeps its old view of the Volume, from before another container committed the checkpoint. So vLLM
+  saw no directory and treated the path as a Hub repo id. Every function that reads checkpoints now calls
+  `hf_cache.reload()` first, and the reruns passed.
+- **M4 results (vLLM 0.30.0, L4):**
+  - Batch-1 decode: FP8 1.33× / 1.46× and INT4 1.69× / 2.18× over BF16 (0.6B / 1.7B). A bytes-only model
+    (bytes ÷ M0 bandwidth + a fixed overhead fitted on BF16) predicts INT4 within 5%. W8A8 runs 6–9% slower
+    than its bytes predict.
+  - **Why W8A8 lags:** read vLLM's installed source. `CutlassInt8ScaledMMLinearKernel.apply_weights` runs
+    `ops.scaled_int8_quant(x)` as its own op before `ops.cutlass_scaled_mm`. Dynamic per-token scales need a
+    pass over each activation first. That's M7's fused RMSNorm+quant kernel, now with a measured motivation.
+  - Saturation barely moves (cost changes between −6% and +1%), as M2 predicted: the KV cache dominates.
+  - The INT4/FP8 crossover falls between batch 64 and 256 on both models.
+  - **My own mistake:** the learning doc's section 2 called B* ≈ 56 the crossover. B* is where INT4's matmuls
+    turn compute-bound. With the linear layers alone, INT4 stays ahead until its 16-bit math time equals FP8's
+    streaming time, at batch ≈ 109. Corrected in the results section; the pre-registered prediction is left as
+    written.
+  - **Kernel fidelity:** vLLM's own perplexity (from prompt logprobs) matches nanoserve's simulation of the
+    same rounded weights within 1% for every format. The low-bit kernels compute what the checkpoints say.
+  - Quantized formats get more non-KV memory reserved at startup, so the KV cache gains less than the weights
+    free. Cause not found (the log only has totals). Open for M5.
+- **Surprise: GPTQ's GSM8K score is partly a stopping failure.** INT4 GSM8K dropped 29 / 22 points (0.6B / 1.7B),
+  far outside the predicted −15…−3 / −10…−1. Logging every answer showed that the GPTQ checkpoints talk past
+  `#### N` on ~40% / ~37% of problems (BF16 ~1.5%, AWQ 3% / 9%). The suite's flexible-extract metric scores the
+  last number said, so a right answer followed by chatter counts as wrong. On strict-match, 1.7B GPTQ is −10
+  (just outside the prediction) and beats AWQ, as its lower KL predicted. 0.6B's INT4 loss is real on either
+  metric: wrong reasoning and loops. Why GPTQ and not AWQ? Unknown; one hypothesis is GPTQ's error compensation
+  fitting C4 (no few-shot Q&A in it). Calibrating on GSM8K-style text would test it. Not done: out of M4's
+  scope.
+- **Spend:** September used $15.28 of Modal's $30 monthly credit (billing through 30 Sep 21:00 UTC). M4's
+  checkpoints (64 GB containers) and ten servers cost the most. The later reruns, fidelity check and GSM8K
+  logging aren't billed yet. None of the owner's $10 reserve is used.
