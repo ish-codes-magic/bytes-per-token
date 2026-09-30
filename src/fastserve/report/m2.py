@@ -282,3 +282,50 @@ def prefill_efficiency_table(records: Records, configs: dict[str, Any], peak_flo
         "% of M0 BF16 peak",
     ]
     return markdown_table(headers, rows)
+
+
+def kv_bound_table(records: Records, configs: dict[str, Any], bandwidth: float, max_seqs: int = 256) -> str:
+    """A first performance model for the saturated throughput workload: does re-reading KV set the peak?
+
+    While a request decodes, its context grows from prompt to prompt + output, so the token-weighted average
+    context is Σ(out·prompt + out·(out−1)/2) / Σ out. At saturation vLLM runs as many sequences as fit (up to
+    `max_seqs` and the KV-cache capacity it logged), and each step reads all their KV plus the weights once.
+    """
+    starts = {m["model"]: m for m in metrics_of(records, "server_start")}
+    rows = []
+    for model, cfg in configs.items():
+        busiest = max(
+            runs(records, model=model, workload="throughput"), key=lambda m: m["summary"]["output_throughput"]
+        )
+        t = busiest["requests"]
+        p_i, o_i = t["columns"].index("prompt_len"), t["columns"].index("output_tokens")
+        weighted = sum(r[o_i] * r[p_i] + r[o_i] * (r[o_i] - 1) / 2 for r in t["rows"])
+        avg_context = weighted / sum(r[o_i] for r in t["rows"])
+        capacity = starts[model]["kv_cache_tokens"]
+        running = min(max_seqs, capacity / avg_context)
+        kv_bytes = running * avg_context * cfg.kv_bytes_per_token()
+        weight_bytes = 2 * cfg.num_params()
+        step_s = (kv_bytes + weight_bytes) / bandwidth
+        rows.append(
+            [
+                model.split("/")[-1],
+                _fmt(avg_context),
+                _fmt(running),
+                _fmt(kv_bytes / 1e9, 1),
+                _fmt(weight_bytes / 1e9, 2),
+                _fmt(running / step_s),
+                _fmt(busiest["summary"]["output_throughput"]),
+                f"{busiest['summary']['output_throughput'] * step_s / running:.0%}",
+            ]
+        )
+    headers = [
+        "Model",
+        "Avg context while decoding",
+        "Sequences that fit",
+        "KV read per step (GB)",
+        "Weights (GB)",
+        "Memory-bound ceiling (tok/s)",
+        "Measured peak (tok/s)",
+        "Measured / ceiling",
+    ]
+    return markdown_table(headers, rows)

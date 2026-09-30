@@ -15,11 +15,17 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))  # the laptop doesn't install the package, only its stdlib-only modules
 
 from fastserve.engine.config import ModelConfig  # noqa: E402
-from fastserve.hw.analysis import m0_observables, measured_peak_flops, metrics_of  # noqa: E402
+from fastserve.hw.analysis import (  # noqa: E402
+    m0_observables,
+    measured_bandwidth,
+    measured_peak_flops,
+    metrics_of,
+)
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
     SMALL,
+    kv_bound_table,
     load_table,
     long_context_table,
     m2_observables,
@@ -84,6 +90,7 @@ def build_blocks() -> dict[str, str]:
         }
         peak = measured_peak_flops(latest_run(read_jsonl(probe)))["bf16"]
         blocks["m2_prefill"] = prefill_efficiency_table(m2, configs, peak)
+        blocks["m2_kv_bound"] = kv_bound_table(m2, configs, measured_bandwidth(latest_run(read_jsonl(probe))))
         offline = REPO / "results" / "raw" / "m2_offline.jsonl"
         if offline.exists():
             blocks["m2_offline"] = offline_table(newest_per_model(read_jsonl(offline)), m2)

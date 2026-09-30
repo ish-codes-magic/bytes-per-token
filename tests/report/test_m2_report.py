@@ -68,3 +68,17 @@ def test_prefill_efficiency_uses_causal_attention_flops(m2_records):
     assert prefill_flops(cfg, 32768) > 2 * prefill_flops(cfg, 16384)
     table = prefill_efficiency_table(m2_records, {"Qwen/Qwen3-0.6B": cfg}, peak_flops=57e12)
     assert table.count("| Qwen3-0.6B |") == 3 and "| 100 |" in table  # the fake runs use 100-token prompts
+
+
+def test_kv_bound_ceiling_counts_kv_and_weight_bytes(m2_records):
+    import json
+    from pathlib import Path
+
+    from fastserve.engine.config import ModelConfig
+    from fastserve.report.m2 import kv_bound_table
+
+    path = Path(__file__).parents[2] / "benchmarks" / "models" / "Qwen3-0.6B.config.json"
+    cfg = ModelConfig.from_hf(json.loads(path.read_text(encoding="utf-8")))
+    table = kv_bound_table(m2_records, {"Qwen/Qwen3-0.6B": cfg}, bandwidth=262e9)
+    # fake rows: prompt 100, output 50 -> average decoding context 100 + 49/2 = 124.5
+    assert "| Qwen3-0.6B | 124 | 256 |" in table
