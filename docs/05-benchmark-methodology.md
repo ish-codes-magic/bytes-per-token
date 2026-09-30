@@ -39,6 +39,11 @@ If a result can't be reproduced by following this page, that's a bug.
 - **Open loop (Poisson arrivals)** measures a public-API-like service, where overload makes queues grow.
   **Closed loop (N users)** measures a fixed set of users, and it hides overload. Both are reported, and the
   knee and goodput use open loop.
+- **The server's view.** During every load point, vLLM's Prometheus `/metrics` is sampled every 0.25 s
+  (`fastserve/serving/server_metrics.py`): running and waiting requests, KV-cache usage, and the prompt-token,
+  output-token and engine-step counters.
+- **Capacity is measured at saturation** (`benchmarks/configs/m2_saturation.yaml`): 512 closed-loop users keep
+  a queue waiting for minutes. Only the intervals with requests waiting at both ends count.
 
 ## Metrics
 
@@ -53,6 +58,9 @@ Defined in `fastserve/serving/metrics.py`:
 | Goodput | requests with TTFT ≤ 500 ms **and** TPOT ≤ 50 ms, ÷ wall time |
 | Knee | the highest open-loop arrival rate at which ≥ 90% of requests meet the SLO |
 | Cost | $0.80 per L4-hour ÷ (output tokens/s × 3600) × 10⁶ |
+| Saturated throughput | Δ output tokens ÷ Δt from the server's counters, over intervals with requests waiting |
+| Step time | Δt ÷ Δ engine steps, over the same intervals |
+| Memory efficiency | time to stream a step's bytes (weights + cached KV, from the server's KV usage) at the M0 bandwidth ÷ the step time |
 
 Percentiles (p50/p90/p99) use linear interpolation, as numpy does by default. Averages are never reported alone.
 
@@ -83,4 +91,6 @@ Percentiles (p50/p90/p99) use linear interpolation, as numpy does by default. Av
 | Too-good-to-be-true results | A negative control for exact-match claims (M1); sanity checks against physical limits |
 | One-time costs (compilation, cold caches) | Warm-up requests; compile caches on a persistent Volume |
 | Results from uncommitted code | Every record carries the commit and a "dirty" flag; runs start from a clean tree |
+| A whole-run average passed off as capacity | Capacity comes from a saturation run, over the intervals where requests wait; the sweep's "peak" is labeled as an average |
+| Mixing time- and step-weighted averages | Server gauges are weighted per engine step whenever they're compared with per-step quantities |
 | Library APIs differing from memory | Checked against the installed version; differences logged in `JOURNAL.md` |
