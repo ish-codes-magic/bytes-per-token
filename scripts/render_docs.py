@@ -40,6 +40,14 @@ from fastserve.report.m2 import (  # noqa: E402
     saturation_table,
     summary_table,
 )
+from fastserve.report.m3 import (  # noqa: E402
+    config_table,
+    m3_observables,
+    model_size_table,
+    names_in_task,
+    sensitivity_table,
+    worked_example_block,
+)
 from fastserve.report.render import render_file  # noqa: E402
 from fastserve.report.tables import (  # noqa: E402
     decode_matmul_table,
@@ -48,6 +56,33 @@ from fastserve.report.tables import (  # noqa: E402
     prediction_table,
 )
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
+
+
+def m3_blocks(m3: list) -> dict[str, str]:
+    predictions = json.loads((REPO / "benchmarks" / "predictions" / "m3.json").read_text(encoding="utf-8"))
+    int4 = ["rtn-int4-g128-full", "gptq-int4-g128", "gptq-int4-g128-trueseq", "library-gptq-int4-g128"]
+    int4 += ["awq-int4-g128", "awq-int4-g128-clip", "awq-int4-g128-paper", "library-awq-int4-g128"]
+    int4 += ["rtn-int4-channel", "gptq-int4-channel", "rtn-int3-g128", "gptq-int3-g128", "awq-int3-g128-clip"]
+    rotation = ["rtn-int4-channel", "rot-rtn-int4-channel", "rtn-int4-g128", "rot-rtn-int4-g128"]
+    rotation += [
+        "gptq-int4-g128",
+        "rot-gptq-int4-g128",
+        "w8a8-int8-tensor-static",
+        "rot-w8a8-int8-tensor-static",
+    ]
+    return {
+        "m3_predictions": prediction_table(predictions, m3_observables(m3)),
+        "m3_grids": config_table(m3, names_in_task(m3, "grids"), reference="rtn-int4-g128"),
+        "m3_calibrated": config_table(m3, int4, reference="rtn-int4-g128-full"),
+        "m3_rotation": config_table(m3, rotation),
+        "m3_w8a8": config_table(m3, names_in_task(m3, "w8a8"), reference="w8a8-int8-tensor-static"),
+        "m3_calibration": config_table(
+            m3, ["gptq-int4-g128", *names_in_task(m3, "calibration")], reference="gptq-int4-g128"
+        ),
+        "m3_model_size": model_size_table(m3, names_in_task(m3, "large", model="Qwen/Qwen3-1.7B")),
+        "m3_sensitivity": sensitivity_table(m3),
+        "m3_gptq_worked_example": worked_example_block(m3),
+    }
 
 
 def build_blocks() -> dict[str, str]:
@@ -114,6 +149,9 @@ def build_blocks() -> dict[str, str]:
         )
         blocks["m2_quality_predictions"] = prediction_table(predictions, quality_observables(m2q))
         blocks["m2_quality"] = quality_table(m2q)
+    quant = REPO / "results" / "raw" / "m3_quant.jsonl"
+    if quant.exists():
+        blocks.update(m3_blocks(read_jsonl(quant)))  # every run: tasks can be re-run, the newest result wins
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

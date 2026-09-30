@@ -358,6 +358,10 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
                 }
                 bandwidth = measured_bandwidth(raw["hw"])
                 written += m2_figures.make_saturation(raw["m2sat"], configs, bandwidth, tmp)
+        elif milestone == "m3":
+            from fastserve.viz import m3_figures
+
+            written = m3_figures.make_all(raw["m3"], tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -499,9 +503,12 @@ def figures(milestone: str = "all") -> None:
         from fastserve.report.m2 import newest_per_model
 
         raw["m2q"] = newest_per_model(read_jsonl(quality))
+    quant = raw_dir / "m3_quant.jsonl"
+    if quant.exists():  # every run: M3 tasks can be re-run, and the report keeps the newest of each result
+        raw["m3"] = read_jsonl(quant)
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2"] if milestone == "all" else [milestone]:
+    for ms in ["m0", "m1", "m2", "m3"] if milestone == "all" else [milestone]:
         if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():
