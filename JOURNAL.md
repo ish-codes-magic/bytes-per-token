@@ -118,3 +118,26 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   - vLLM sizes the KV cache at every start: 142,928 then 152,800 tokens for the 1.7B on identical containers.
 - **M2 quality results:** all 10 predictions within range. The needle test is saturated (100% for both models),
   so it can only catch breakage. KL and perplexity are the sensitive measures.
+- **Gate M2 approved** (questions deferred by the owner). Tagged `v0.2-baselines`.
+- **M3 environment:** `datasets` joins the research image for calibration text. The lock moved only `fsspec`
+  (2026.9.0 → 2026.6.0, capped by `datasets`), a file-I/O helper that nothing measured in M0/M1 depends on.
+- **Library check (llm-compressor 0.14.0, read from the installed source before comparing):**
+  - GPTQ defaults to act-order "static", block 128 and dampening 0.01.
+  - Its symmetric INT4 grid is `s = max|w| / 7.5`, with all 16 codes: 7% finer than the textbook `max|w| / 7`,
+    at the price of clipping the largest positive weight by half a step. Our RTN now offers both (`full_range`).
+  - AWQ moved: `llmcompressor.modifiers.awq.AWQModifier` is now a deprecated wrapper that builds a transform
+    modifier plus a QuantizationModifier. The transform uses duo scaling (`s = x̄^α / w̄^(1−α)`), scores α on
+    each parent module's output (the whole attention block for q/k/v), and has **no clipping search**. Our
+    first AWQ scored concatenated linear outputs with the paper's `s = x̄^α`. It now follows the standard
+    definition, with the paper's form and AutoAWQ's clipping as options.
+  - llm-compressor quantizes all linears of a layer from one calibration pass (not "true sequential"); our
+    comparison configuration matches that.
+- **Wrong test, corrected:** I asserted that per-token FP8 activation scales beat per-tensor ones ≥10×, as they
+  do for INT8. For FP8 they barely differ. A logarithmic grid has about the same *relative* precision at any
+  scale. The test now states that contrast.
+- **Worked example needed care:** my first hand-picked 4-weight GPTQ example had compensation that never crossed
+  a rounding boundary, so GPTQ tied RTN exactly. A search over candidate weights (excluding near-ties, which
+  float noise could flip) found one where RTN rounds two correlated weights the same way and GPTQ flips one.
+- **llm-compressor's AWQ is slow here:** 17 minutes for Qwen3-0.6B vs 2.5 for its GPTQ. My dense-weight export
+  afterwards hit a transient CUDA OOM warning (the library's caches still held the GPU); the allocator retried,
+  and the export's own check passed (≤16 values per group of 128).
