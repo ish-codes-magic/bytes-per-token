@@ -59,7 +59,7 @@ from fastserve.report.tables import (  # noqa: E402
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
 
 
-def m4_blocks(m4: list, m2_quality: list, m3: list) -> dict[str, str]:
+def m4_blocks(m4: list, m2_quality: list, m3: list, configs: dict, bandwidth: float) -> dict[str, str]:
     predictions = json.loads((REPO / "benchmarks" / "predictions" / "m4.json").read_text(encoding="utf-8"))
     return {
         "m4_predictions": prediction_table(predictions, m4_report.m4_observables(m4, m2_quality, m3)),
@@ -70,6 +70,8 @@ def m4_blocks(m4: list, m2_quality: list, m3: list) -> dict[str, str]:
         "m4_checkpoints": m4_report.checkpoint_table(m4),
         "m4_fidelity": m4_report.fidelity_table(m4),
         "m4_gsm8k": m4_report.gsm8k_failure_table(m4, m2_quality),
+        "m4_bytes_model": m4_report.bytes_model_table(m4, configs, bandwidth),
+        "m4_crossover": m4_report.crossover_table(m4),
     }
 
 
@@ -186,8 +188,16 @@ def build_blocks() -> dict[str, str]:
     if quant.exists():
         blocks.update(m3_blocks(read_jsonl(quant)))  # every run: tasks can be re-run, the newest result wins
     production = REPO / "results" / "raw" / "m4_production.jsonl"
-    if production.exists() and quant.exists() and quality.exists():
-        blocks.update(m4_blocks(read_jsonl(production), read_jsonl(quality), read_jsonl(quant)))
+    if production.exists() and quant.exists() and quality.exists() and probe.exists():
+        configs = {
+            model: ModelConfig.from_pretrained_json(
+                REPO / "benchmarks" / "models" / f"{model.split('/')[-1]}.config.json"
+            )
+            for model in (SMALL, LARGE)
+        }
+        bandwidth = measured_bandwidth(latest_run(read_jsonl(probe)))
+        records = read_jsonl(production), read_jsonl(quality), read_jsonl(quant)
+        blocks.update(m4_blocks(*records, configs, bandwidth))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
