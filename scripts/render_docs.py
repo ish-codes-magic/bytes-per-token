@@ -58,6 +58,21 @@ from fastserve.report.tables import (  # noqa: E402
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
 
 
+def compute_spend(path: Path) -> str:
+    """One line: what the cloud compute has cost so far, from Modal's billing (scripts/compute_log.py)."""
+    import csv
+
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    by_resource: dict[str, float] = {}
+    for row in rows:
+        by_resource[row["resource"]] = by_resource.get(row["resource"], 0.0) + float(row["usd"])
+    ranked = sorted(by_resource.items(), key=lambda kv: -kv[1])
+    parts = ", ".join(f"{name} ${usd:.2f}" for name, usd in ranked)
+    through = rows[-1]["billed_through_hour"].replace("T", " ")[:16]
+    total = sum(by_resource.values())
+    return f"Cloud compute so far: **${total:.2f}** on Modal ({parts}), billed through {through} UTC."
+
+
 def m3_blocks(m3: list) -> dict[str, str]:
     predictions = json.loads((REPO / "benchmarks" / "predictions" / "m3.json").read_text(encoding="utf-8"))
     int4 = ["rtn-int4-g128-full", "gptq-int4-g128", "gptq-int4-g128-trueseq", "library-gptq-int4-g128"]
@@ -155,6 +170,9 @@ def build_blocks() -> dict[str, str]:
     quant = REPO / "results" / "raw" / "m3_quant.jsonl"
     if quant.exists():
         blocks.update(m3_blocks(read_jsonl(quant)))  # every run: tasks can be re-run, the newest result wins
+    spend = REPO / "results" / "compute_log.csv"
+    if spend.exists():
+        blocks["compute_spend"] = compute_spend(spend)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")
