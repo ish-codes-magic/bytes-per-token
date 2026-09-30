@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 # Heavy runtime dependencies. They are installed only inside the cloud image (infra/modal_app.py),
 # never on the development laptop.
 dependencies = [
+    "aiohttp>=3.9",
     "huggingface-hub>=0.25",
     "matplotlib>=3.8",
     "numpy>=1.26",
