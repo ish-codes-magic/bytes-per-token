@@ -159,3 +159,20 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     damage. KL is the honest measure.
 - **Missing log fixed:** PROJECT.md promised a `results/compute_log.csv` from M0 on, and it was never written.
   It now comes from Modal's own billing API (`scripts/compute_log.py`), not from estimates.
+
+## 2026-10-01
+
+- **Gate M3 approved** (questions deferred by the owner). Tagged `v0.3-quant-reference`.
+- **Library check for M4 (llm-compressor 0.14.0):**
+  - FP8_DYNAMIC means FP8 per-channel weights with dynamic per-token FP8 activations. W8A8 is the INT8
+    equivalent. Both match M3's simulated `w8a8-*-token` configurations.
+  - SmoothQuant now lives among the transform modifiers.
+  - `oneshot` shuffles calibration samples by default. That doesn't affect M3: GPTQ's Hessian and AWQ's
+    statistics are sums over samples.
+- **Dead end: AWQ out of GPU memory.** llm-compressor's AWQ caches every parent module's inputs and outputs for
+  all 128 × 2,048 calibration tokens on the GPU. Qwen3-0.6B's AWQ checkpoint ran out of the L4's 22 GiB (M3's
+  run had only just fit, with OOM warnings). The laptop couldn't even show the error: the remote exception is a
+  torch type, and the local venv has no torch. The fix keeps the calibration identical: `AWQModifier(offload_device="cpu")`,
+  with more container RAM.
+- **Not done: publishing checkpoints.** AGENTS.md asks for Hugging Face uploads with model cards. Publishing is
+  outward-facing and needs the owner's account, so the checkpoints stay on the Modal Volume until they decide.
