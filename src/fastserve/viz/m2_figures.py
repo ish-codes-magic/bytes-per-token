@@ -126,28 +126,31 @@ def cdfs(records: Records) -> tuple[plt.Figure, str]:
 
 
 def swimlane(records: Records, n: int = 60) -> tuple[plt.Figure, str]:
-    rows = sorted(
-        runs(records, model=SMALL, workload="throughput", mode="open"), key=lambda m: m["load"]["rate"]
-    )
-    knee = knee_rate(records, SMALL) or rows[0]["load"]["rate"]
-    above = [m for m in rows if m["load"]["rate"] > knee]
-    run = above[0] if above else rows[-1]
+    """Requests from the middle of the most loaded run, where the queue has built up."""
+    from matplotlib.patches import Patch
+
+    run = max(runs(records, model=SMALL, workload="throughput", mode="open"), key=lambda m: m["load"]["rate"])
     data = _per_request(run["requests"])
-    order = np.argsort(data["sent"])[:n]
+    by_arrival = np.argsort(data["sent"])
+    middle = len(by_arrival) // 2
+    order = by_arrival[max(0, middle - n // 2) : middle + n // 2]
     fig, ax = plt.subplots(figsize=(9, 5))
     for lane, i in enumerate(order):
         sent, first, end = data["sent"][i], data["first_token"][i], data["finished"][i]
         ax.barh(lane, first - sent, left=sent, color=OKABE_ITO["orange"], height=0.8)
         ax.barh(lane, end - first, left=first, color=OKABE_ITO["blue"], height=0.8)
-    ax.barh([], [], color=OKABE_ITO["orange"], label="waiting + prefill (until the first token)")
-    ax.barh([], [], color=OKABE_ITO["blue"], label="decoding")
+    handles = [
+        Patch(color=OKABE_ITO["orange"], label="waiting + prefill (until the first token)"),
+        Patch(color=OKABE_ITO["blue"], label="decoding"),
+    ]
+    # Below the x-axis label: inside the axes every corner is covered by some bar.
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=2, frameon=False)
     ax.set(
-        xlabel="time (s)",
+        xlabel="time since the run started (s)",
         ylabel="request (by arrival)",
-        title=f"{n} requests at {run['load']['rate']:g} req/s",
+        title=f"{len(order)} requests from the middle of a {run['load']['rate']:g} req/s run",
     )
     ax.invert_yaxis()
-    ax.legend(loc="lower right", fontsize=8)
     ax.grid(False)
     # How many requests decode at the same moment: sweep over start/end events.
     events = sorted([(data["first_token"][i], 1) for i in order] + [(data["finished"][i], -1) for i in order])
@@ -156,9 +159,10 @@ def swimlane(records: Records, n: int = 60) -> tuple[plt.Figure, str]:
         running += delta
         peak_running = max(peak_running, running)
     waits = data["ttft_ms"][order]
+    rate, longest, median = run["load"]["rate"], waits.max(), np.median(waits)
     caption = (
-        f"At {run['load']['rate']:g} req/s up to {peak_running} of these requests decode at once, "
-        f"and the wait for a first token grows to {waits.max():,.0f} ms as the queue builds."
+        f"Mid-run at {rate:g} req/s, up to {peak_running} of these {len(order)} requests decode together, "
+        f"and waits for a first token reach {longest:,.0f} ms (median {median:,.0f} ms)."
     )
     return fig, caption
 
