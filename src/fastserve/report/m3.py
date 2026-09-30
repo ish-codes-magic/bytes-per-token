@@ -103,23 +103,27 @@ def _grid(e: dict[str, Any]) -> str:
 
 def label(e: dict[str, Any]) -> str:
     """A readable name for one configuration entry."""
+    prefix = "rotated, " if e.get("rotate") else ("γ folded, " if e.get("fold") else "")
+    suffix = ", FP32 copy" if e.get("dtype") == "float32" else ""
+    if e["method"] == "bf16":
+        return ("BF16 (reference)" if not prefix else f"BF16, {prefix[:-2]}") + suffix
+    return prefix + _method_label(e) + suffix
+
+
+def _method_label(e: dict[str, Any]) -> str:
     method = e["method"]
-    rotated = "rotated, " if e.get("rotate") else ""
-    if method == "bf16":
-        return "BF16 (reference)"
     if method == "rtn":
-        return f"{rotated}RTN {_grid(e)}"
+        return f"RTN {_grid(e)}"
     if method == "nf4":
         return f"NF4, blocks of {e['block_size']}"
     if method == "fp8_weight":
         return f"FP8 E4M3 weights, per-{e.get('granularity', 'channel')}"
     if method == "gptq":
         extra = ", true-sequential" if e.get("true_sequential") else ""
-        data = e.get("calibration")
-        samples = e.get("samples")
+        data, samples = e.get("calibration"), e.get("samples")
         if data or samples:
             extra += f", calibrated on {data or 'c4'}" + (f" × {samples}" if samples else "")
-        return f"{rotated}GPTQ {_grid(e)}{extra}"
+        return f"GPTQ {_grid(e)}{extra}"
     if method == "awq":
         scaling = "duo scaling" if e.get("duo_scaling", True) else "paper scaling"
         return f"AWQ {_grid(e)} ({scaling}{', clip search' if e.get('clip') else ''})"
@@ -128,7 +132,7 @@ def label(e: dict[str, Any]) -> str:
     if method == "w8a8":
         acts = f"{'static' if e.get('static') else 'dynamic'} per-{e['act']} activations"
         smooth = "SmoothQuant + " if e.get("smooth") is not None else ""
-        return f"{rotated}{smooth}W8A8 {e['format'].upper()}, {acts}"
+        return f"{smooth}W8A8 {e['format'].upper()}, {acts}"
     return e["name"]
 
 

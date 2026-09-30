@@ -39,6 +39,10 @@ def test_labels_read_like_the_method():
         "GPTQ INT4 g128, full range, calibrated on code"
     )
     assert label({"method": "awq", "bits": 3, "clip": True}) == "AWQ INT3 g128 (duo scaling, clip search)"
+    assert label({"method": "bf16", "fold": True}) == "BF16, γ folded"
+    assert label({"method": "rtn", "bits": 4, "rotate": True, "dtype": "float32"}) == (
+        "rotated, RTN INT4 g128, FP32 copy"
+    )
     assert label({"method": "w8a8", "format": "int8", "act": "tensor", "static": True, "smooth": 0.5}) == (
         "SmoothQuant + W8A8 INT8, static per-tensor activations"
     )

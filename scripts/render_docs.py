@@ -75,6 +75,9 @@ def m3_blocks(m3: list) -> dict[str, str]:
         "m3_grids": config_table(m3, names_in_task(m3, "grids"), reference="rtn-int4-g128"),
         "m3_calibrated": config_table(m3, int4, reference="rtn-int4-g128-full"),
         "m3_rotation": config_table(m3, rotation),
+        "m3_rotation_diagnosis": config_table(
+            m3, ["rtn-int4-g128", *names_in_task(m3, "rotation_diagnosis"), "rot-rtn-int4-g128"]
+        ),
         "m3_w8a8": config_table(m3, names_in_task(m3, "w8a8"), reference="w8a8-int8-tensor-static"),
         "m3_calibration": config_table(
             m3, ["gptq-int4-g128", *names_in_task(m3, "calibration")], reference="gptq-int4-g128"
