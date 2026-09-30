@@ -1,0 +1,17 @@
+{
+  "milestone": "M2",
+  "written_in_commit": "PENDING",
+  "note": "Written before running the vLLM baselines. Reasoning is in docs/learning/M2-baselines.md, section 4.",
+  "predictions": [
+    {"id": "chat_tpot_ms", "label": "Chat TPOT p50, Qwen3-0.6B (ms)", "low": 5.5, "high": 8},
+    {"id": "chat_ttft_ms", "label": "Chat TTFT p50, Qwen3-0.6B (ms)", "low": 10, "high": 30},
+    {"id": "vllm_over_nanoserve", "label": "Batch-1 decode speed, vLLM / nanoserve (x)", "low": 6, "high": 9},
+    {"id": "peak_tok_s", "label": "Peak output throughput, Qwen3-0.6B (tokens/s)", "low": 3000, "high": 6000},
+    {"id": "knee_rate", "label": "Knee: highest rate with >= 90% of requests in SLO, 0.6B (req/s)", "low": 12, "high": 25},
+    {"id": "tpot_ratio_1_7b", "label": "Chat TPOT, 1.7B / 0.6B (x)", "low": 2.2, "high": 2.9},
+    {"id": "throughput_ratio_1_7b", "label": "Peak throughput, 1.7B / 0.6B (x)", "low": 0.6, "high": 0.9},
+    {"id": "long32k_ttft_s", "label": "TTFT with a 32k-token prompt, 0.6B (s)", "low": 0.5, "high": 1.2},
+    {"id": "long32k_tpot_ratio", "label": "TPOT at 32k context / chat TPOT, 0.6B (x)", "low": 2, "high": 4},
+    {"id": "shared_prefix_peak_rate", "label": "Peak request rate, shared-prefix workload, 0.6B (req/s)", "low": 12, "high": 25}
+  ]
+}
