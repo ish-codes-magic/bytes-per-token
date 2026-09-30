@@ -225,6 +225,28 @@ def m2_offline_run(model: str, config_path: str, git: dict) -> list[dict]:
     return to_plain([record])
 
 
+@app.function(cpu=2, memory=8192, timeout=20 * 60, volumes={CACHE: hf_cache})
+def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
+    """Load a little of every calibration/evaluation source, so a missing dataset fails fast and cheaply."""
+    from transformers import AutoTokenizer
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.quality.text import SOURCES, calibration_ids, wikitext_eval_ids
+
+    tokenizer = AutoTokenizer.from_pretrained(model_dir(model))
+    found: dict = {"wikitext_test tokens": len(wikitext_eval_ids(tokenizer))}
+    for name in SOURCES:
+        if name == "wikitext_test":
+            continue
+        try:
+            ids = calibration_ids(tokenizer, name, 4, 2048)
+            found[name] = f"{tuple(ids.shape)}: {tokenizer.decode(ids[0, :24])!r}"
+        except Exception as err:  # report every source, even after one fails
+            found[name] = f"{type(err).__name__}: {err}"
+    hf_cache.commit()  # keep the downloaded shards for the real runs
+    return found
+
+
 @app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60)
 def quant_library_facts() -> str:
     """The installed llm-compressor's defaults and grid formula, read before comparing against it."""
