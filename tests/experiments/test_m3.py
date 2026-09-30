@@ -100,3 +100,22 @@ def test_folding_alone_and_float32_copies_preserve_the_model(bench):
     assert folded["mean_kl"] < 1e-9 and folded["gamma_spread"]["max_over_median"] >= 1
     rotated = run_entry(bench, {"name": "rot32", "method": "bf16", "rotate": True, "dtype": "float32"})
     assert rotated["mean_kl"] < 1e-6  # float32 rounding only
+
+
+def test_library_checkpoints_load_from_a_path_with_activation_quantization(bench, tmp_path):
+    from safetensors.torch import save_file
+
+    from fastserve.quant.model import decoder_linears
+    from fastserve.quant.w8a8 import QuantLinear
+
+    path = tmp_path / "tiny.dense.safetensors"
+    save_file({k: v.contiguous() for k, v in bench.ref.state_dict().items()}, str(path))
+    entry = {"name": "lib", "method": "library", "checkpoint": str(path), "bits": 8, "granularity": "channel"}
+    plain = run_entry(bench, entry)
+    w8a8 = run_entry(bench, {**entry, "act": "token", "format": "fp8"})
+    assert 0 <= plain["mean_kl"] < w8a8["mean_kl"]  # BF16 storage alone, then FP8 activations on top
+
+    from fastserve.experiments.m3 import build
+
+    model, _ = build(bench, {**entry, "act": "token", "format": "int8"})
+    assert all(isinstance(m, QuantLinear) for m in decoder_linears(model).values())

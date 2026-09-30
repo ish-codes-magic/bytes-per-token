@@ -129,8 +129,15 @@ def build(bench: Bench, entry: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     if method == "library":
         from safetensors.torch import load_file
 
-        state = load_file(f"{LIBRARY_DIR}/{entry['checkpoint']}.safetensors", device=str(bench.device))
-        model = from_state_dict(bench.config, state, device=bench.device, dtype=torch.bfloat16)
+        path = entry["checkpoint"]  # a dense state dict: M3's by name, or any absolute path (M4's)
+        path = path if path.startswith("/") else f"{LIBRARY_DIR}/{path}.safetensors"
+        model = from_state_dict(
+            bench.config, load_file(path, device=str(bench.device)), device=bench.device, dtype=torch.bfloat16
+        )
+        if entry.get("act"):  # a library W8A8 checkpoint: rounded weights, activations quantized on the fly
+            w8a8_model(
+                model, W8A8Config(entry["format"], act_granularity=entry["act"]), quantize_weights=False
+            )
     else:
         model = copy.deepcopy(bench.ref)
     if entry.get("dtype") == "float32":  # e.g. to separate rotation's effect from BF16 rounding

@@ -252,8 +252,17 @@ def smoothquant_model(model: nn.Module, amax: dict[str, torch.Tensor], alpha: fl
 
 
 @torch.no_grad()
-def w8a8_model(model: nn.Module, cfg: W8A8Config, amax: dict[str, torch.Tensor] | None = None) -> None:
-    """Replace every decoder linear with a QuantLinear: 8-bit weights, 8-bit inputs at every call."""
+def w8a8_model(
+    model: nn.Module,
+    cfg: W8A8Config,
+    amax: dict[str, torch.Tensor] | None = None,
+    quantize_weights: bool = True,
+) -> None:
+    """Replace every decoder linear with a QuantLinear: 8-bit weights, 8-bit inputs at every call.
+
+    quantize_weights=False keeps the weights as they are, for checkpoints whose weights were already rounded
+    (by a library, on its own grid) and only need their activations quantized.
+    """
     if cfg.act_static and amax is None:
         raise ValueError("static activation scales need calibration maxima (input_amax)")
     for name, module in decoder_linears(model).items():
@@ -261,4 +270,5 @@ def w8a8_model(model: nn.Module, cfg: W8A8Config, amax: dict[str, torch.Tensor] 
         parent = model.model.get_submodule(parent_name)
         static = amax[name].max() if cfg.act_static else None
         quantizer = activation_quantizer(cfg, static)
-        setattr(parent, child, QuantLinear(module, quantize_weight(module.weight.data, cfg), quantizer))
+        weight = quantize_weight(module.weight.data, cfg) if quantize_weights else module.weight.data
+        setattr(parent, child, QuantLinear(module, weight, quantizer))
