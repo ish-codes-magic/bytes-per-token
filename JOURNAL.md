@@ -141,3 +141,21 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **llm-compressor's AWQ is slow here:** 17 minutes for Qwen3-0.6B vs 2.5 for its GPTQ. My dense-weight export
   afterwards hit a transient CUDA OOM warning (the library's caches still held the GPU); the allocator retried,
   and the export's own check passed (≤16 values per group of 128).
+- **M3 results (Qwen3-0.6B, KL vs BF16 on WikiText-2):**
+  - The pipeline checks out: BF16 nanoserve's perplexity matches M2's Hugging Face value. Our GPTQ and AWQ land
+    within a few percent of llm-compressor's KL on the same grid and calibration tokens.
+  - **Round-to-nearest is harsher than I predicted at every width.** The model has massive activations
+    (residual channels ~1,300× the median). A weight column that reads one turns ordinary rounding error into
+    huge output error. AWQ, which protects those columns, beats GPTQ at 4 bits. The most fragile module is layer
+    2's down_proj, which writes the massive channels: the residual stream jumps from layer 3 onward.
+  - **Rotation made RTN worse; the cause was folding, not rotating.** A follow-up run separated the steps.
+    Folding the RMSNorm γ into the weights alone makes RTN INT4 3× worse: one norm's γ spans 61× between its
+    largest and median channel. Rotating afterwards helps, but not back to plain RTN. BF16 rounding of the
+    rotated weights costs almost nothing. With GPTQ, rotation gives the best INT4 result of the milestone.
+  - Asymmetric grids matter far more than expected (INT3: 4.5 → 1.9 KL). NF4 beats uniform INT4 at the same block.
+  - FP8 W8A8 is insensitive to how its activation scale is chosen. INT8 needs per-token scales or SmoothQuant.
+  - Calibration: 8 sequences ≈ 128. Domain matters: code calibration makes GPTQ no better than RTN on prose.
+  - INT8 *lowered* Qwen3-1.7B's perplexity below BF16 while its KL stayed at 0.006: perplexity can reward
+    damage. KL is the honest measure.
+- **Missing log fixed:** PROJECT.md promised a `results/compute_log.csv` from M0 on, and it was never written.
+  It now comes from Modal's own billing API (`scripts/compute_log.py`), not from estimates.
