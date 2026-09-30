@@ -1,6 +1,6 @@
 {
   "milestone": "M2 (quality)",
-  "written_in_commit": "PENDING",
+  "written_in_commit": "3909257",
   "note": "Written before running the quality baselines. Wide ranges: prior knowledge of similar-sized models, not measurements. Reasoning in docs/learning/M2-baselines.md, section 4.",
   "predictions": [
     {"id": "ppl_small", "label": "WikiText-2 perplexity, Qwen3-0.6B", "low": 12, "high": 30},
