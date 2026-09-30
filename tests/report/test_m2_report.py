@@ -33,3 +33,23 @@ def test_m2_tables(m2_records):
     table = load_table(m2_records, SMALL)
     assert "| 16 req/s |" in table and "| 64 users |" in table and "| 50% |" in table
     assert "| Qwen3-0.6B | 32k | 700 | 20.00 |" in long_context_table(m2_records)
+
+
+def test_newest_per_model_keeps_one_record_per_experiment_and_model(m2_records):
+    from fastserve.report.m2 import newest_per_model
+
+    older = dict(m2_records[0], timestamp="2000-01-01T00:00:00+00:00", metrics={**m2_records[0]["metrics"]})
+    kept = newest_per_model([older, m2_records[0]])
+    assert kept == [m2_records[0]]
+
+
+def test_offline_table_compares_engine_with_served_peak(m2_records):
+    from fastserve.report.m2 import offline_table
+
+    offline = [
+        {
+            "experiment": "offline_throughput",
+            "metrics": {"model": "Qwen/Qwen3-0.6B", "output_throughput": 8000.0},
+        }
+    ]
+    assert "| Qwen3-0.6B | 8,000 | 4,000 | 50% |" in offline_table(offline, m2_records)

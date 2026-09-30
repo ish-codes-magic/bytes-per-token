@@ -23,6 +23,10 @@ from fastserve.report.m2 import (  # noqa: E402
     load_table,
     long_context_table,
     m2_observables,
+    newest_per_model,
+    offline_table,
+    quality_observables,
+    quality_table,
     summary_table,
 )
 from fastserve.report.render import render_file  # noqa: E402
@@ -71,6 +75,17 @@ def build_blocks() -> dict[str, str]:
         blocks["m2_load_large"] = load_table(m2, LARGE)
         blocks["m2_shared_prefix"] = load_table(m2, SMALL, "shared_prefix")
         blocks["m2_long_context"] = long_context_table(m2)
+        offline = REPO / "results" / "raw" / "m2_offline.jsonl"
+        if offline.exists():
+            blocks["m2_offline"] = offline_table(newest_per_model(read_jsonl(offline)), m2)
+    quality = REPO / "results" / "raw" / "m2_quality.jsonl"
+    if quality.exists():
+        m2q = newest_per_model(read_jsonl(quality))
+        predictions = json.loads(
+            (REPO / "benchmarks" / "predictions" / "m2_quality.json").read_text(encoding="utf-8")
+        )
+        blocks["m2_quality_predictions"] = prediction_table(predictions, quality_observables(m2q))
+        blocks["m2_quality"] = quality_table(m2q)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

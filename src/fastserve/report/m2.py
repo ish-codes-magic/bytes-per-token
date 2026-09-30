@@ -209,3 +209,30 @@ def quality_table(records: Records) -> str:
         "Needle (%)",
     ]
     return markdown_table(headers, sorted(rows))
+
+
+def newest_per_model(records: Records) -> Records:
+    """Results gathered from separate containers (one run id each): the newest per (experiment, model)."""
+    newest: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in records:
+        key = (r["experiment"], r["metrics"].get("model", ""))
+        if key not in newest or r["timestamp"] > newest[key]["timestamp"]:
+            newest[key] = r
+    return list(newest.values())
+
+
+def offline_table(offline: Records, serving: Records) -> str:
+    """vLLM's engine alone vs the same engine behind its HTTP server and our client."""
+    rows = []
+    for m in sorted(metrics_of(offline, "offline_throughput"), key=lambda m: m["model"]):
+        served = peak_throughput(serving, m["model"])
+        rows.append(
+            [
+                m["model"].split("/")[-1],
+                _fmt(m["output_throughput"]),
+                _fmt(served),
+                f"{served / m['output_throughput']:.0%}" if served else "—",
+            ]
+        )
+    headers = ["Model", "Engine alone (tokens/s)", "Served peak (tokens/s)", "Served / engine"]
+    return markdown_table(headers, rows)

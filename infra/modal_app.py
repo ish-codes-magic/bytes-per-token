@@ -233,6 +233,8 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             written = m1_figures.make_all(raw["m1"], raw["hw"], cfg, tmp)
         elif milestone == "m2":
             written = m2_figures.make_all(raw["m2"], tmp)
+            if raw.get("m2q"):
+                written += m2_figures.make_quality(raw["m2q"], tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -353,6 +355,11 @@ def figures(milestone: str = "all") -> None:
         for key, file in (("hw", "hw_probe.jsonl"), ("m1", "m1_nanoserve.jsonl"), ("m2", "m2_serving.jsonl"))
         if (raw_dir / file).exists()
     }
+    quality = raw_dir / "m2_quality.jsonl"
+    if quality.exists():  # gathered from one container per (task, model): keep the newest of each
+        from fastserve.report.m2 import newest_per_model
+
+        raw["m2q"] = newest_per_model(read_jsonl(quality))
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
     for ms in ["m0", "m1", "m2"] if milestone == "all" else [milestone]:
