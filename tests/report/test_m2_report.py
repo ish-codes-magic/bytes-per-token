@@ -70,15 +70,50 @@ def test_prefill_efficiency_uses_causal_attention_flops(m2_records):
     assert table.count("| Qwen3-0.6B |") == 3 and "| 100 |" in table  # the fake runs use 100-token prompts
 
 
-def test_kv_bound_ceiling_counts_kv_and_weight_bytes(m2_records):
+def _qwen3_small():
     import json
     from pathlib import Path
 
     from fastserve.engine.config import ModelConfig
-    from fastserve.report.m2 import kv_bound_table
 
     path = Path(__file__).parents[2] / "benchmarks" / "models" / "Qwen3-0.6B.config.json"
-    cfg = ModelConfig.from_hf(json.loads(path.read_text(encoding="utf-8")))
-    table = kv_bound_table(m2_records, {"Qwen/Qwen3-0.6B": cfg}, bandwidth=262e9)
-    # fake rows: prompt 100, output 50 -> average decoding context 100 + 49/2 = 124.5
-    assert "| Qwen3-0.6B | 124 | 256 |" in table
+    return ModelConfig.from_hf(json.loads(path.read_text(encoding="utf-8")))
+
+
+def test_plateau_uses_only_intervals_with_a_queue(m2_saturation_records):
+    from fastserve.report.m2 import plateau, runs
+
+    p = plateau(runs(m2_saturation_records, model=SMALL, workload="saturation")[0])
+    assert p["seconds"] == pytest.approx(8)  # t = 1..9: both ends of each interval had requests waiting
+    assert p["output_tok_s"] == pytest.approx(4000) and p["prompt_tok_s"] == pytest.approx(1000)
+    assert p["step_ms"] == pytest.approx(50) and p["running"] == 200 and p["kv_usage"] == 0.5
+
+
+def test_saturation_table_compares_measured_steps_with_streaming_the_bytes(m2_saturation_records):
+    from fastserve.report.m2 import saturation_table
+
+    cfg = _qwen3_small()
+    table = saturation_table(m2_saturation_records, {SMALL: cfg}, bandwidth=262e9)
+    # half of 100,000 cached tokens across 200 sequences; each step streams the weights plus that KV
+    step_s = (2 * cfg.num_params() + 50_000 * cfg.kv_bytes_per_token()) / 262e9
+    ratio = 4000 / (200 / step_s)
+    assert "| Qwen3-0.6B | 8 | 200 | 250 |" in table and "| 50.0 | 4,000 |" in table
+    assert table.rstrip().endswith(f"| {ratio:.0%} |")
+
+
+def test_peak_definition_contrasts_the_sweep_average_with_the_plateau(m2_records, m2_saturation_records):
+    from fastserve.report.m2 import mean_decoding, peak_definition_table, runs
+
+    sweep = runs(m2_records, model=SMALL, workload="throughput", mode="open")[0]
+    # 10 requests, 0.1 s apart, each decoding for 1 s: at most 10 overlap, fewer during ramp-up and drain
+    assert 0 < mean_decoding(sweep["requests"]) < 10
+    table = peak_definition_table(m2_records, m2_saturation_records)
+    assert "| Qwen3-0.6B | 4,000 (64 users) |" in table and "| 4,000 | 200 | 1.0× |" in table
+
+
+def test_prefill_budget_predicts_the_batch_with_littles_law(m2_saturation_records):
+    from fastserve.report.m2 import prefill_budget_table
+
+    table = prefill_budget_table(m2_saturation_records)
+    # R = B·O / (P + O) = 2048 × 64 / (2112 + 64) ≈ 60, and each 100 ms step carries 1,988 prompt tokens
+    assert "| Qwen3-0.6B | 2,048 | 2,112 + 64 | 60 | 60 | 1,988 | 100 | 9.4 |" in table

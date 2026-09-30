@@ -326,3 +326,74 @@ def m2_records() -> list[dict[str, Any]]:
             )
         )
     return records
+
+
+@pytest.fixture
+def m2_saturation_records() -> list[dict[str, Any]]:
+    """A hand-made saturation run: server timelines with round numbers, so every rate is easy to check.
+
+    saturation: 200 running, KV cache half full, 4,000 tokens/s in 50 ms steps, a queue from t = 1 s to 9 s.
+    shared_prefix: 60 running, 100 ms steps each carrying 1,988 prompt tokens, a queue throughout.
+    """
+    env, git = {"gpu": "NVIDIA L4"}, {"commit": "0123456789abcdef", "dirty": False}
+    columns = [
+        "t",
+        "running",
+        "waiting",
+        "kv_usage",
+        "prompt_tokens",
+        "generation_tokens",
+        "steps",
+        "preemptions",
+    ]
+
+    def rec(experiment: str, metrics: dict[str, Any]) -> dict[str, Any]:
+        return make_record(experiment, metrics, run_id="m2sat", env=env, git=git, config={})
+
+    def requests(n: int, prompt: int, output: int) -> dict[str, Any]:
+        rows = [[i, prompt, output, 0.1 * i, 0.1 * i, 0.1 * i + 0.05, 0.1 * i + 1.05] for i in range(n)]
+        return {
+            "columns": ["id", "prompt_len", "output_tokens", "scheduled", "sent", "first_token", "finished"],
+            "rows": rows,
+        }
+
+    records = []
+    for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B"):
+        start = {
+            "model": model,
+            "label": "vllm-bf16",
+            "kv_cache_tokens": 100_000,
+            "max_num_batched_tokens": 2048,
+        }
+        records.append(rec("server_start", start))
+        saturated = [
+            [t, 200, 10 if 1 <= t <= 9 else 0, 0.5, 1000 * t, 4000 * t, 20 * t, 0] for t in range(11)
+        ]
+        records.append(
+            rec(
+                "serving",
+                {
+                    "model": model,
+                    "workload": "saturation",
+                    "load": {"mode": "closed", "concurrency": 512},
+                    "summary": {"output_throughput": 3000.0},
+                    "requests": requests(20, 256, 192),
+                    "server_timeline": {"columns": columns, "rows": saturated},
+                },
+            )
+        )
+        shared = [[t, 60, 5, 0.9, 19_880 * t, 600 * t, 10 * t, 0] for t in range(5)]
+        records.append(
+            rec(
+                "serving",
+                {
+                    "model": model,
+                    "workload": "shared_prefix",
+                    "load": {"mode": "open", "rate": 16},
+                    "summary": {"output_throughput": 500.0},
+                    "requests": requests(20, 2112, 64),
+                    "server_timeline": {"columns": columns, "rows": shared},
+                },
+            )
+        )
+    return records

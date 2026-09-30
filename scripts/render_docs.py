@@ -25,15 +25,17 @@ from fastserve.report.m1 import m1_observables, parity_table, profile_table, spe
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
     SMALL,
-    kv_bound_table,
     load_table,
     long_context_table,
     m2_observables,
     newest_per_model,
     offline_table,
+    peak_definition_table,
+    prefill_budget_table,
     prefill_efficiency_table,
     quality_observables,
     quality_table,
+    saturation_table,
     summary_table,
 )
 from fastserve.report.render import render_file  # noqa: E402
@@ -90,7 +92,13 @@ def build_blocks() -> dict[str, str]:
         }
         peak = measured_peak_flops(latest_run(read_jsonl(probe)))["bf16"]
         blocks["m2_prefill"] = prefill_efficiency_table(m2, configs, peak)
-        blocks["m2_kv_bound"] = kv_bound_table(m2, configs, measured_bandwidth(latest_run(read_jsonl(probe))))
+        saturation = REPO / "results" / "raw" / "m2_saturation.jsonl"
+        if saturation.exists():
+            sat = latest_run(read_jsonl(saturation))
+            bandwidth = measured_bandwidth(latest_run(read_jsonl(probe)))
+            blocks["m2_peak_definition"] = peak_definition_table(m2, sat)
+            blocks["m2_saturation"] = saturation_table(sat, configs, bandwidth)
+            blocks["m2_prefill_budget"] = prefill_budget_table(sat)
         offline = REPO / "results" / "raw" / "m2_offline.jsonl"
         if offline.exists():
             blocks["m2_offline"] = offline_table(newest_per_model(read_jsonl(offline)), m2)
