@@ -1,0 +1,59 @@
+# M4: quantized checkpoints served in vLLM, measured for speed and quality against BF16.
+# Run: uv run --only-group local modal run infra/modal_app.py::m4
+# Order: llm-compressor makes the checkpoints; as each one lands, its server, task scores and KL start.
+
+# ---- checkpoints (llm-compressor, infra/quant.lock) --------------------------------------------------------
+checkpoints:
+  models: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B]
+  formats: [fp8, int8, gptq, awq]              # see src/fastserve/experiments/m4_checkpoints.py
+calibration: {source: c4, samples: 128, seq_len: 2048}   # M3's calibration set
+
+# ---- speed (vLLM; read by experiments/m2.run_serving) ------------------------------------------------------
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80
+slo: {ttft_ms: 500, tpot_ms: 50}
+seed: 0
+servers:                                         # one container each; `path` is a checkpoint on the Volume
+  - {name: 0.6b-bf16, label: bf16, model: Qwen/Qwen3-0.6B, args: [--no-enable-prefix-caching]}
+  - {name: 0.6b-fp8, label: fp8, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-fp8, args: [--no-enable-prefix-caching]}
+  - {name: 0.6b-int8, label: int8, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-int8, args: [--no-enable-prefix-caching]}
+  - {name: 0.6b-gptq, label: gptq, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-gptq, args: [--no-enable-prefix-caching]}
+  - {name: 0.6b-awq, label: awq, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-awq, args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-bf16, label: bf16, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-fp8, label: fp8, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8, args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-int8, label: int8, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-int8, args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-gptq, label: gptq, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-gptq, args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-awq, label: awq, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-awq, args: [--no-enable-prefix-caching]}
+loads:
+  chat:                                          # one user: batch 1
+    - {mode: closed, concurrency: 1}
+  decode:                                        # N users, fixed lengths: a decode batch of N, three waves each
+    - {mode: closed, concurrency: 1, requests: 6}
+    - {mode: closed, concurrency: 4, requests: 12}
+    - {mode: closed, concurrency: 16, requests: 48}
+    - {mode: closed, concurrency: 64, requests: 192}
+    - {mode: closed, concurrency: 256, requests: 768}
+  long_8k:                                       # prefill: compute-bound
+    - {mode: closed, concurrency: 1}
+  long_32k:
+    - {mode: closed, concurrency: 1}
+  saturation:                                    # capacity, and $ per 1M tokens (as in M2)
+    - {mode: closed, concurrency: 512}
+
+# ---- quality -----------------------------------------------------------------------------------------------
+suite: {}                                        # lm-eval: the M2 suite (GSM8K, MMLU slice, HumanEval) via vLLM
+model: Qwen/Qwen3-0.6B                           # nanoserve KL, like M3 (read by experiments/m3.run_task)
+eval: {window: 2048, max_windows: 40}
+tasks:                                           # KL sections, one container each
+  kl_small:
+    - {name: fp8, method: library, checkpoint: /cache/m4/Qwen3-0.6B-fp8.dense.safetensors, bits: 8, granularity: channel, format: fp8, act: token}
+    - {name: int8, method: library, checkpoint: /cache/m4/Qwen3-0.6B-int8.dense.safetensors, bits: 8, granularity: channel, format: int8, act: token}
+    - {name: gptq, method: library, checkpoint: /cache/m4/Qwen3-0.6B-gptq.dense.safetensors, bits: 4, full_range: true}
+    - {name: awq, method: library, checkpoint: /cache/m4/Qwen3-0.6B-awq.dense.safetensors, bits: 4, full_range: true}
+  kl_large:
+    model: Qwen/Qwen3-1.7B
+    entries:
+      - {name: fp8, method: library, checkpoint: /cache/m4/Qwen3-1.7B-fp8.dense.safetensors, bits: 8, granularity: channel, format: fp8, act: token}
+      - {name: int8, method: library, checkpoint: /cache/m4/Qwen3-1.7B-int8.dense.safetensors, bits: 8, granularity: channel, format: int8, act: token}
+      - {name: gptq, method: library, checkpoint: /cache/m4/Qwen3-1.7B-gptq.dense.safetensors, bits: 4, full_range: true}
+      - {name: awq, method: library, checkpoint: /cache/m4/Qwen3-1.7B-awq.dense.safetensors, bits: 4, full_range: true}
