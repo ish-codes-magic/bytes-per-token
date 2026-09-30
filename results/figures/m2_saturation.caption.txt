@@ -1,0 +1,1 @@
+Held full for 252 s, Qwen3-0.6B decodes 1,849 tokens/s with 252 sequences running, at 54% of the memory-bound ceiling; once the queue drains and no new prompts arrive, steps run at 88% of it.
