@@ -396,3 +396,71 @@ def m2_saturation_records() -> list[dict[str, Any]]:
             )
         )
     return records
+
+
+@pytest.fixture
+def m3_records() -> list[dict[str, Any]]:
+    """A hand-made M3 campaign: each configuration's KL is a round number, so every ratio is easy to check."""
+    env, git = {"gpu": "NVIDIA L4"}, {"commit": "0123456789abcdef", "dirty": False}
+    kls = {
+        "bf16": 0.0,
+        "rtn-int8-channel": 0.001,
+        "rtn-int4-channel": 0.5,
+        "rtn-int4-g128": 0.1,
+        "rtn-int4-g64": 0.08,
+        "rtn-int4-g128-full": 0.09,
+        "rtn-int3-g128": 0.6,
+        "rtn-int2-g64-asym": 5.0,
+        "nf4-b64": 0.06,
+        "fp8-weight-channel": 0.004,
+        "gptq-int4-g128": 0.045,
+        "awq-int4-g128": 0.054,
+        "library-gptq-int4-g128": 0.05,
+        "library-awq-int4-g128": 0.06,
+        "rot-rtn-int4-channel": 0.2,
+        "w8a8-fp8-token": 0.01,
+        "w8a8-int8-tensor-static": 2.0,
+        "sq-w8a8-int8-tensor-static": 0.2,
+        "calib-c4-8": 0.054,
+        "calib-code": 0.0495,
+        "calib-wikitext": 0.0405,
+    }
+    entries = {
+        "bf16": {"method": "bf16"},
+        "rtn-int4-g128": {"method": "rtn", "bits": 4},
+        "gptq-int4-g128": {"method": "gptq", "bits": 4, "full_range": True},
+        "w8a8-fp8-token": {"method": "w8a8", "format": "fp8", "act": "token"},
+    }
+    records = []
+
+    def add(experiment, metrics, task="grids", stamp="2026-09-30T00:00:00+00:00"):
+        record = make_record(experiment, metrics, run_id="m3test", env=env, git=git, config={"task": task})
+        record["timestamp"] = stamp
+        records.append(record)
+
+    for model, scale in (("Qwen/Qwen3-0.6B", 1.0), ("Qwen/Qwen3-1.7B", 0.5)):
+        for name, kl in kls.items():
+            entry = {"name": name, **entries.get(name, {"method": "rtn", "bits": 4})}
+            metrics = {
+                "model": model,
+                "config": name,
+                "entry": entry,
+                "bits_per_weight": 4.125,
+                "model_gb": 0.5,
+                "mean_kl": kl * scale,
+                "top1_agreement": 1 - kl / 10,
+                "perplexity_ref": 20.0,
+                "perplexity_cand": 20.0 * (1 + kl),
+            }
+            add("m3_config", metrics)
+    # a stale, older result for one configuration: the newest must win
+    stale = dict(records[3]["metrics"], mean_kl=9.9)
+    add("m3_config", stale, stamp="2026-09-29T00:00:00+00:00")
+    add("m3_outliers", {"model": "Qwen/Qwen3-0.6B", "residual_ratio": 1500.0})
+    cells = [
+        {"layer": layer, "module": module, "kl": 0.004 if module == "down_proj" else 0.001}
+        for layer in range(28)
+        for module in ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+    ]
+    add("m3_sensitivity", {"model": "Qwen/Qwen3-0.6B", "spec": "INT4 g128 sym", "windows": 4, "cells": cells})
+    return records
