@@ -190,7 +190,7 @@ Two sizes from one family show **how each gain changes with model size**.
 Everything runs in the cloud on [Modal](https://modal.com). Locally you only need [uv](https://docs.astral.sh/uv/).
 
 <!-- BEGIN GENERATED: compute_spend -->
-Cloud compute so far: **$4.12** on Modal (L4 $2.36, CPU $1.00, Memory $0.76), billed through 2026-09-30 16:00 UTC.
+Cloud compute so far: **$15.28** on Modal (L4 $8.81, CPU $3.41, Memory $3.05), billed through 2026-09-30 21:00 UTC.
 <!-- END GENERATED: compute_spend -->
 
 ```bash
