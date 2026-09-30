@@ -106,9 +106,9 @@ def summary_table(records: Records) -> str:
         "Chat TTFT p50 (ms)",
         "Chat TPOT p50 (ms)",
         "Single-stream tokens/s",
-        "Peak tokens/s",
+        "Sweep peak tokens/s (run average)",
         "Knee (req/s)",
-        "$ / 1M tokens at peak",
+        "$ / 1M tokens at that peak",
         "KV cache (tokens)",
     ]
     return markdown_table(headers, rows)
