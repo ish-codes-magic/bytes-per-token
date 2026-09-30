@@ -1,6 +1,7 @@
 # Gate Report: M3, quantization from scratch
 
-> **Gate decision:** pending. The explain-it-back questions below are for later study; M4 can start on approval.
+> **Gate decision (2026-10-01):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.3-quant-reference`.
 
 ## What was built
 
