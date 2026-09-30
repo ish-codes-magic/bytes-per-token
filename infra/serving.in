@@ -1,0 +1,8 @@
+# The serving image: vLLM and the tools that drive it. Kept apart from the research image (pyproject.toml),
+# because vLLM pins its own PyTorch. Compile the lock with:
+#   uv pip compile infra/serving.in --python-version 3.12 --python-platform x86_64-manylinux_2_28 -o infra/serving.lock
+vllm
+lm-eval[vllm]
+aiohttp
+pyyaml
+numpy
