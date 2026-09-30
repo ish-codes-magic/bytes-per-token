@@ -251,3 +251,28 @@ def checkpoint_table(m4: Records) -> str:
         "Max distinct values per 128 weights",
     ]
     return markdown_table(headers, rows)
+
+
+def fidelity_table(m4: Records) -> str:
+    """vLLM's perplexity (real low-bit kernels) against nanoserve's (the same rounded weights, simulated)."""
+    served = {(m["model"], m["format"]): m["perplexity"] for m in _newest(m4, "m4_vllm_perplexity")}
+    simulated: dict[tuple[str, str], float] = {}
+    for m in _newest(m4, "m3_config"):
+        simulated[m["model"], m["config"]] = m["perplexity_cand"]
+        simulated[m["model"], "bf16"] = m["perplexity_ref"]
+    rows = []
+    for model in (SMALL, LARGE):
+        for fmt in FORMATS:
+            a, b = served.get((model, fmt)), simulated.get((model, fmt))
+            if a is None and b is None:
+                continue
+            gap = 100 * (a / b - 1) if a and b else None
+            rows.append([model.split("/")[-1], FORMAT_LABELS[fmt], _f(b, 2), _f(a, 2), _f(gap, 1, "%")])
+    headers = [
+        "Model",
+        "Format",
+        "Perplexity, nanoserve (simulated)",
+        "Perplexity, vLLM (real kernels)",
+        "Gap",
+    ]
+    return markdown_table(headers, rows)

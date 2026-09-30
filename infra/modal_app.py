@@ -305,6 +305,27 @@ def m4_suite(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> 
     )
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m4_fidelity(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """vLLM's own perplexity for one format, to compare with nanoserve's on the same rounded weights."""
+    import yaml
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.experiments.m2_quality import vllm_perplexity_task
+    from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
+    from fastserve.results import environment_info, make_record, to_plain
+
+    hf_cache.reload()
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    path = model_dir(model) if fmt == "bf16" else f"{CHECKPOINT_DIR}/{model.split('/')[-1]}-{fmt}"
+    metrics = {"model": model, "format": fmt, **vllm_perplexity_task(path, config["eval"])}
+    meta = {"path": config_path, "eval": config["eval"]}
+    record = make_record(
+        "m4_vllm_perplexity", metrics, run_id=run_id, config=meta, git=git, env=environment_info()
+    )
+    return to_plain([record])
+
+
 @app.function(cpu=2, memory=8192, timeout=20 * 60, volumes={CACHE: hf_cache})
 def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
     """Load a little of every calibration/evaluation source, so a missing dataset fails fast and cheaply."""
@@ -626,7 +647,7 @@ def m3(config: str = "benchmarks/configs/m3_quant.yaml", tasks: str = "") -> Non
 @app.local_entrypoint()
 def m4(
     config: str = "benchmarks/configs/m4_production.yaml",
-    steps: str = "checkpoints,serving,suite,kl",
+    steps: str = "checkpoints,serving,suite,kl,fidelity",
     formats: str = "",
     models: str = "",
 ) -> None:
@@ -659,12 +680,16 @@ def m4(
             calls.append((f"serving {server[model, fmt]}", m2_run.spawn(config, git, [server[model, fmt]])))
         if "suite" in wanted:
             calls.append((f"suite {model} {fmt}", m4_suite.spawn(fmt, model, config, run_id, git)))
+        if "fidelity" in wanted:
+            calls.append((f"fidelity {model} {fmt}", m4_fidelity.spawn(fmt, model, config, run_id, git)))
 
-    if "serving" in wanted and not formats_given:  # BF16 needs no checkpoint
-        for model in models:
+    for model in [] if formats_given else models:  # BF16 needs no checkpoint
+        if "serving" in wanted:
             calls.append(
                 (f"serving {server[model, 'bf16']}", m2_run.spawn(config, git, [server[model, "bf16"]]))
             )
+        if "fidelity" in wanted:
+            calls.append((f"fidelity {model} bf16", m4_fidelity.spawn("bf16", model, config, run_id, git)))
     if "checkpoints" in wanted:
         made = {(m, f): m4_checkpoint.spawn(f, m, config, run_id, git) for m in models for f in formats}
         ready = dict.fromkeys(models, 0)

@@ -560,9 +560,20 @@ def m4_records() -> list[dict[str, Any]]:
                         "scores": {"gsm8k": {"score": 0.40 - 0.05 * (fmt in ("gptq", "awq"))}},
                     },
                 )
+                kl = 0.02 if fmt in ("fp8", "int8") else 0.3
                 add(
                     "m3_config",
-                    {"model": model, "config": fmt, "mean_kl": 0.02 if fmt in ("fp8", "int8") else 0.3},
+                    {
+                        "model": model,
+                        "config": fmt,
+                        "mean_kl": kl,
+                        "perplexity_ref": 20.0,
+                        "perplexity_cand": 20.0 * (1 + kl),
+                    },
+                )
+                add(
+                    "m4_vllm_perplexity",
+                    {"model": model, "format": fmt, "perplexity": 20.0 * (1 + kl) * 1.01},
                 )
                 add(
                     "m4_checkpoint",

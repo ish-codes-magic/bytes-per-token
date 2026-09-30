@@ -54,3 +54,11 @@ def test_tables(m4_records, m2_quality):
         and "| INT4 W4A16 (GPTQ) | 0.300 | 35.0 |" in quality
     )
     assert checkpoint_table(m4_records).count("| 16 |") == 8
+
+
+def test_fidelity_compares_served_and_simulated_perplexity(m4_records):
+    from fastserve.report.m4 import fidelity_table
+
+    table = fidelity_table(m4_records)
+    assert "| Qwen3-0.6B | FP8 W8A8 | 20.40 | 20.60 | 1.0% |" in table
+    assert "| Qwen3-0.6B | BF16 | 20.00 | — | — |" in table  # no vLLM BF16 perplexity in this fixture

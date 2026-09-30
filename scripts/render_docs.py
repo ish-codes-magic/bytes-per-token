@@ -68,6 +68,7 @@ def m4_blocks(m4: list, m2_quality: list, m3: list) -> dict[str, str]:
         "m4_decode_large": m4_report.decode_table(m4, "Qwen/Qwen3-1.7B"),
         "m4_quality": m4_report.quality_table(m4, m2_quality),
         "m4_checkpoints": m4_report.checkpoint_table(m4),
+        "m4_fidelity": m4_report.fidelity_table(m4),
     }
 
 
