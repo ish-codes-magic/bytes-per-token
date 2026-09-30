@@ -10,6 +10,7 @@ From the repo root (the laptop's venv holds only `modal` and `ruff`):
     uv run --only-group local modal run infra/modal_app.py::m1          # M1 nanoserve measurements
     uv run --only-group local modal run infra/modal_app.py::m2          # M2 vLLM serving baselines
     uv run --only-group local modal run infra/modal_app.py::m2q         # M2 quality baselines
+    uv run --only-group local modal run infra/modal_app.py::m3          # M3 quantization from scratch
 
 The container image is built in the cloud from pyproject.toml + uv.lock and cached after the first build.
 Every function has a timeout, so a hung job can never eat the month's free credit.
@@ -221,6 +222,43 @@ def m2_offline_run(model: str, config_path: str, git: dict) -> list[dict]:
         config={"path": config_path, **config},
         git=git,
         env=environment_info(),
+    )
+    return to_plain([record])
+
+
+@app.function(cpu=1, memory=1024, timeout=5 * 60)
+def load_config(config_path: str) -> dict:
+    """A YAML config, parsed in the cloud (the laptop has no PyYAML)."""
+    import yaml
+
+    return yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+
+
+@app.function(gpu=GPU, cpu=4, memory=32768, timeout=150 * 60, volumes={CACHE: hf_cache})
+def m3_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """One section of the M3 config (a set of quantized configurations, or an analysis) on one L4."""
+    import yaml
+
+    from fastserve.experiments.m3 import run_task
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    return to_plain(run_task(task, config, run_id=run_id, git=git, config_path=config_path))
+
+
+@app.function(image=quant_image, gpu=GPU, cpu=4, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m3_library(entry: dict, calibration: dict, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """llm-compressor quantizes the model; the dense result goes to the Volume, for nanoserve to score."""
+    from fastserve.experiments.m3_library import LIBRARY_DIR, library_checkpoint
+    from fastserve.results import environment_info, make_record, to_plain
+
+    Path(LIBRARY_DIR).mkdir(parents=True, exist_ok=True)
+    out = f"{LIBRARY_DIR}/{entry['name']}.safetensors"
+    info = library_checkpoint(entry["method"], entry["model"], calibration, out)
+    hf_cache.commit()
+    config = {"path": config_path, "entry": entry, "calibration": calibration}
+    record = make_record(
+        "m3_library_checkpoint", info, run_id=run_id, config=config, git=git, env=environment_info()
     )
     return to_plain([record])
 
@@ -469,3 +507,34 @@ def figures(milestone: str = "all") -> None:
         for name, data in render_figures.remote(ms, raw).items():
             (out / name).write_bytes(data)
             print(f"wrote results/figures/{name}")
+
+
+@app.local_entrypoint()
+def m3(config: str = "benchmarks/configs/m3_quant.yaml", tasks: str = "") -> None:
+    """M3: llm-compressor's checkpoints and every task of the config, each in its own container.
+
+    `--tasks grids,gptq` runs a subset. "library" makes llm-compressor's checkpoints; "library_eval" scores
+    them, and starts as soon as they exist.
+    """
+    from fastserve.results import append_jsonl, git_info, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    cfg = load_config.remote(config)
+    wanted = tasks.split(",") if tasks else ["library", *cfg["tasks"]]
+    run_id, out = new_run_id(), REPO / "results" / "raw" / "m3_quant.jsonl"
+    library = []
+    if "library" in wanted:  # llm-compressor's checkpoints, made while the other tasks run
+        library = [m3_library.spawn(e, cfg["calibration"], config, run_id, git) for e in cfg["library"]]
+    calls = {t: m3_task.spawn(t, config, run_id, git) for t in wanted if t not in ("library", "library_eval")}
+    for call in library:
+        records = call.get()
+        print(f"wrote {append_jsonl(out, records)} library checkpoint record: {records[0]['metrics']}")
+    if "library_eval" in wanted:
+        calls["library_eval"] = m3_task.spawn("library_eval", config, run_id, git)
+    for task, call in calls.items():
+        try:
+            print(f"{task}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}")
+        except Exception as err:  # keep what the other tasks produced
+            print(f"{task} FAILED: {type(err).__name__}: {err}")
