@@ -87,6 +87,15 @@ def test_plateau_uses_only_intervals_with_a_queue(m2_saturation_records):
     assert p["seconds"] == pytest.approx(8)  # t = 1..9: both ends of each interval had requests waiting
     assert p["output_tok_s"] == pytest.approx(4000) and p["prompt_tok_s"] == pytest.approx(1000)
     assert p["step_ms"] == pytest.approx(50) and p["running"] == 200 and p["kv_usage"] == 0.5
+    assert p["prompt_per_step"] == pytest.approx(50)
+
+
+def test_drained_intervals_are_decode_only(m2_saturation_records):
+    from fastserve.report.m2 import drained, plateau, runs
+
+    p = plateau(runs(m2_saturation_records, model=SMALL, workload="saturation")[0], drained)
+    assert p["seconds"] == pytest.approx(4) and p["prompt_per_step"] == 0
+    assert p["running"] == 100 and p["step_ms"] == pytest.approx(25)
 
 
 def test_saturation_table_compares_throughput_with_streaming_the_bytes(m2_saturation_records):
@@ -106,8 +115,9 @@ def test_decode_efficiency_puts_one_sequence_next_to_the_saturated_engine(m2_rec
     from fastserve.report.m2 import decode_efficiency_table
 
     table = decode_efficiency_table(m2_records, m2_saturation_records, {SMALL: _qwen3_small()}, 262e9)
-    assert "| Qwen3-0.6B | 1 | 124 |" in table  # chat: 100-token prompts + half of 50 output tokens
-    assert "| Qwen3-0.6B | 200 | 250 |" in table and "| 50.0 |" in table  # 200 sequences at 4,000 tok/s
+    assert "| one user, chat | 1 | 124 | 0 |" in table  # 100-token prompts + half of 50 output tokens
+    assert "| saturated, queue waiting | 200 | 250 | 50 |" in table
+    assert "| saturated, queue drained | 100 | 250 | 0 |" in table
 
 
 def test_peak_definition_contrasts_the_sweep_average_with_the_plateau(m2_records, m2_saturation_records):

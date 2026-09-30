@@ -332,7 +332,8 @@ def m2_records() -> list[dict[str, Any]]:
 def m2_saturation_records() -> list[dict[str, Any]]:
     """A hand-made saturation run: server timelines with round numbers, so every rate is easy to check.
 
-    saturation: 200 running, KV cache half full, 4,000 tokens/s in 50 ms steps, a queue from t = 1 s to 9 s.
+    saturation: 200 running, KV cache half full, 4,000 tokens/s in 50 ms steps, a queue from t = 1 s to 9 s;
+    then the queue is gone: 100 running, KV a quarter full, 25 ms steps, no new prompts, until t = 14 s.
     shared_prefix: 60 running, 100 ms steps each carrying 1,988 prompt tokens, a queue throughout.
     """
     env, git = {"gpu": "NVIDIA L4"}, {"commit": "0123456789abcdef", "dirty": False}
@@ -365,9 +366,8 @@ def m2_saturation_records() -> list[dict[str, Any]]:
             "kv_cache_tokens": 100_000,
         }
         records.append(rec("server_start", start))
-        saturated = [
-            [t, 200, 10 if 1 <= t <= 9 else 0, 0.5, 1000 * t, 4000 * t, 20 * t, 0] for t in range(11)
-        ]
+        saturated = [[t, 200, 10 if t >= 1 else 0, 0.5, 1000 * t, 4000 * t, 20 * t, 0] for t in range(10)]
+        saturated += [[t, 100, 0, 0.25, 10_000, 4000 * t, 200 + 40 * (t - 10), 0] for t in range(10, 15)]
         records.append(
             rec(
                 "serving",

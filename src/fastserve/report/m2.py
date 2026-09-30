@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import statistics
+from collections.abc import Callable
 from itertools import pairwise
 from typing import Any
 
@@ -301,39 +302,55 @@ def mean_decoding(requests: dict[str, Any]) -> float:
     return area / (max(c["finished"]) - min(c["sent"]))
 
 
-def plateau(metrics: dict[str, Any]) -> dict[str, float] | None:
-    """The saturated stretch of one load point, from the server's own timeline.
+_TIMELINE_KEYS = ("t", "running", "waiting", "kv_usage", "prompt_tokens", "generation_tokens", "steps")
+
+
+def _intervals(metrics: dict[str, Any]) -> list[tuple[dict, dict]]:
+    """Consecutive pairs of complete samples from a load point's server timeline."""
+    c = _columns(metrics["server_timeline"])
+    values = zip(*(c[k] for k in _TIMELINE_KEYS), strict=True)
+    return list(pairwise(dict(zip(_TIMELINE_KEYS, v, strict=True)) for v in values if None not in v))
+
+
+def queued(a: dict, b: dict) -> bool:
+    """Requests waited at both ends of the interval: the engine was as full as vLLM makes it."""
+    return a["waiting"] > 0 and b["waiting"] > 0
+
+
+def drained(a: dict, b: dict, min_running: int = 50) -> bool:
+    """The queue is gone, so no new prompts arrive, but a big batch is still decoding."""
+    return a["waiting"] == 0 and b["waiting"] == 0 and min(a["running"], b["running"]) >= min_running
+
+
+def plateau(metrics: dict[str, Any], keep: Callable[[dict, dict], bool] = queued) -> dict[str, float] | None:
+    """Rates and per-step averages over the timeline intervals `keep` selects (default: saturated ones).
 
     Saturated = requests are waiting: the engine already runs as many sequences as vLLM allows, so the rates
-    measured there are its capacity. Rates are counter differences over the intervals whose two ends both had
-    a queue, and gauges are time-weighted averages over the same intervals.
+    measured there are its capacity. Rates are counter differences. The running count and KV usage are
+    averaged per engine step: each interval's value is weighted by the steps it contains.
     """
-    keys = ("t", "running", "waiting", "kv_usage", "prompt_tokens", "generation_tokens", "steps")
-    c = _columns(metrics["server_timeline"])
-    points = [
-        dict(zip(keys, v, strict=True)) for v in zip(*(c[k] for k in keys), strict=True) if None not in v
-    ]
-    total = dict.fromkeys(
-        ("seconds", "running", "kv_usage", "prompt_tokens", "generation_tokens", "steps"), 0.0
-    )
-    for a, b in pairwise(points):
-        if a["waiting"] > 0 and b["waiting"] > 0:
-            dt = b["t"] - a["t"]
-            total["seconds"] += dt
-            for counter in ("prompt_tokens", "generation_tokens", "steps"):
-                total[counter] += b[counter] - a[counter]
-            for gauge in ("running", "kv_usage"):
-                total[gauge] += dt * (a[gauge] + b[gauge]) / 2
-    seconds = total["seconds"]
-    if not seconds or not total["steps"]:
+    total = dict.fromkeys(("seconds", "steps", "prompt", "generated", "seq_steps", "kv_steps"), 0.0)
+    for a, b in _intervals(metrics):
+        if not keep(a, b):
+            continue
+        steps = b["steps"] - a["steps"]
+        total["seconds"] += b["t"] - a["t"]
+        total["steps"] += steps
+        total["prompt"] += b["prompt_tokens"] - a["prompt_tokens"]
+        total["generated"] += b["generation_tokens"] - a["generation_tokens"]
+        total["seq_steps"] += steps * (a["running"] + b["running"]) / 2
+        total["kv_steps"] += steps * (a["kv_usage"] + b["kv_usage"]) / 2
+    seconds, steps = total["seconds"], total["steps"]
+    if not seconds or not steps:
         return None
     return {
         "seconds": seconds,
-        "running": total["running"] / seconds,
-        "kv_usage": total["kv_usage"] / seconds,
-        "output_tok_s": total["generation_tokens"] / seconds,
-        "prompt_tok_s": total["prompt_tokens"] / seconds,
-        "step_ms": seconds / total["steps"] * 1e3,
+        "running": total["seq_steps"] / steps,
+        "kv_usage": total["kv_steps"] / steps,
+        "output_tok_s": total["generated"] / seconds,
+        "prompt_tok_s": total["prompt"] / seconds,
+        "prompt_per_step": total["prompt"] / steps,
+        "step_ms": seconds / steps * 1e3,
     }
 
 
@@ -342,12 +359,25 @@ def memory_bound_step_s(kv_tokens: float, cfg: Any, bandwidth: float) -> float:
     return (2 * cfg.num_params() + kv_tokens * cfg.kv_bytes_per_token()) / bandwidth
 
 
+def memory_efficiency(p: dict[str, float], kv_capacity: int, cfg: Any, bandwidth: float) -> float:
+    """Time the average step would take just streaming its bytes ÷ the time it took.
+
+    Memory time is linear in the cached tokens, so the per-step average KV usage gives its per-step average.
+    """
+    return memory_bound_step_s(p["kv_usage"] * kv_capacity, cfg, bandwidth) / (p["step_ms"] / 1e3)
+
+
 def saturation_run(records: Records, model: str, workload: str) -> tuple[dict, dict] | None:
-    """(load point, its plateau) for one model and workload of the saturation experiment."""
+    """(load point, its saturated plateau) for one model and workload of the saturation experiment."""
     for m in runs(records, model=model, workload=workload):
         if "server_timeline" in m and (p := plateau(m)):
             return m, p
     return None
+
+
+def kv_capacity(records: Records, model: str) -> int:
+    """KV-cache size in tokens, as vLLM logged it when this run's server started."""
+    return next(m for m in metrics_of(records, "server_start") if m["model"] == model)["kv_cache_tokens"]
 
 
 def token_weighted_context(requests: dict[str, Any]) -> float:
@@ -367,27 +397,27 @@ def saturation_table(saturation: Records, configs: dict[str, Any], bandwidth: fl
     """Held at saturation: what the engine sustains, against the ceiling set by streaming its bytes.
 
     The server's KV-cache usage gives the tokens cached across all running sequences, so the bytes each step
-    must read are measured: weights + cached tokens × KV bytes per token. The ceiling is the running
-    sequences ÷ the time to read those bytes at the M0 bandwidth.
+    must read are measured: weights + cached tokens × KV bytes per token. The ceiling is the output rate if
+    every step took only the time to read them at the M0 bandwidth.
     """
-    starts = {m["model"]: m for m in metrics_of(saturation, "server_start")}
     rows = []
     for model, cfg in configs.items():
         if not (found := saturation_run(saturation, model, "saturation")):
             continue
         m, p = found
-        kv_tokens = p["kv_usage"] * starts[model]["kv_cache_tokens"]
-        ceiling = p["running"] / memory_bound_step_s(kv_tokens, cfg, bandwidth)
+        capacity = kv_capacity(saturation, model)
+        efficiency = memory_efficiency(p, capacity, cfg, bandwidth)
+        measured_context = p["kv_usage"] * capacity / p["running"]
         rows.append(
             [
                 model.split("/")[-1],
                 _fmt(p["seconds"]),
                 _fmt(p["running"]),
-                f"{_fmt(token_weighted_context(m['requests']))} / {_fmt(kv_tokens / p['running'])}",
+                f"{_fmt(token_weighted_context(m['requests']))} / {_fmt(measured_context)}",
                 f"{p['kv_usage']:.0%}",
                 _fmt(p["output_tok_s"]),
-                _fmt(ceiling),
-                f"{p['output_tok_s'] / ceiling:.0%}",
+                _fmt(p["output_tok_s"] / efficiency),
+                f"{efficiency:.0%}",
             ]
         )
     headers = [
@@ -403,50 +433,66 @@ def saturation_table(saturation: Records, configs: dict[str, Any], bandwidth: fl
     return markdown_table(headers, rows)
 
 
+_ONE_USER = {"chat": "one user, chat", "long_8k": "one user, 8k prompt", "long_16k": "one user, 16k prompt"}
+_ONE_USER["long_32k"] = "one user, 32k prompt"
+
+
 def decode_efficiency_table(
     baseline: Records, saturation: Records, configs: dict[str, Any], bandwidth: float
 ) -> str:
-    """How close decoding gets to the time it takes to stream each step's bytes.
+    """How close each decode step gets to the time it takes to stream its bytes.
 
-    One sequence: the single-user workloads' TPOT p50, with the context averaged over the answer (prompt +
-    half the output). Saturated: every running sequence, with the KV bytes measured by the server, and the
-    time per output token of each sequence = running sequences ÷ output tokens/s.
+    One user: TPOT p50, with the context averaged over the answer (prompt + half the output). Saturated: the
+    server timeline, once while requests wait (every step also prefills new prompts) and once after the
+    queue drains (decode only).
     """
-    starts = {m["model"]: m for m in metrics_of(saturation, "server_start")}
     rows = []
 
-    def row(model: str, sequences: float, context: float, tpot_s: float, cfg: Any) -> list[str]:
-        memory_s = memory_bound_step_s(sequences * context, cfg, bandwidth)
-        return [
-            model.split("/")[-1],
-            _fmt(sequences),
-            _fmt(context),
-            _fmt(memory_s * bandwidth / 1e9, 2),
-            _fmt(memory_s * 1e3, 1),
-            _fmt(tpot_s * 1e3, 1),
-            f"{memory_s / tpot_s:.0%}",
-        ]
+    def row(model: str, label: str, sequences: float, context: float, prompt: str, step_s: float) -> None:
+        memory_s = memory_bound_step_s(sequences * context, configs[model], bandwidth)
+        rows.append(
+            [
+                model.split("/")[-1],
+                label,
+                _fmt(sequences),
+                _fmt(context),
+                prompt,
+                _fmt(memory_s * bandwidth / 1e9, 2),
+                _fmt(memory_s * 1e3, 1),
+                _fmt(step_s * 1e3, 1),
+                f"{memory_s / step_s:.0%}",
+            ]
+        )
 
-    for model, cfg in configs.items():
-        for workload in ("chat", "long_8k", "long_16k", "long_32k"):
+    for model in configs:
+        for workload, label in _ONE_USER.items():
             for m in runs(baseline, model=model, workload=workload):
                 c = _columns(m["requests"])
                 pairs = zip(c["prompt_len"], c["output_tokens"], strict=True)
                 context = statistics.fmean(p + (o - 1) / 2 for p, o in pairs)
-                rows.append(row(model, 1, context, _p(m["summary"], "tpot_ms") / 1e3, cfg))
+                row(model, label, 1, context, "0", _p(m["summary"], "tpot_ms") / 1e3)
         if found := saturation_run(saturation, model, "saturation"):
-            _, p = found
-            kv_tokens = p["kv_usage"] * starts[model]["kv_cache_tokens"]
-            rows.append(
-                row(model, p["running"], kv_tokens / p["running"], p["running"] / p["output_tok_s"], cfg)
-            )
+            capacity = kv_capacity(saturation, model)
+            for label, keep in (("saturated, queue waiting", queued), ("saturated, queue drained", drained)):
+                if p := plateau(found[0], keep):
+                    kv = p["kv_usage"] * capacity
+                    row(
+                        model,
+                        label,
+                        p["running"],
+                        kv / p["running"],
+                        _fmt(p["prompt_per_step"]),
+                        p["step_ms"] / 1e3,
+                    )
     headers = [
         "Model",
+        "Decoding",
         "Sequences",
         "Context per sequence",
+        "Prompt tokens per step",
         "Bytes per step (GB)",
         "Step at memory speed (ms)",
-        "Measured TPOT (ms)",
+        "Measured step (ms)",
         "Memory efficiency",
     ]
     return markdown_table(headers, rows)
