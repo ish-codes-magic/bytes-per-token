@@ -31,6 +31,11 @@ GRID_COLORS = {
 }
 
 
+def _weight_quantizer(entry: dict[str, Any]) -> bool:
+    """A weight-only method as deployed: not BF16, not W8A8, not a rotation-diagnosis variant."""
+    return entry["method"] not in ("bf16", "w8a8") and not entry.get("fold") and not entry.get("dtype")
+
+
 def _style(entry: dict[str, Any]) -> tuple[str, str, str]:
     return METHOD_STYLE["rotated" if entry.get("rotate") else entry["method"]]
 
@@ -73,8 +78,8 @@ def grids(records: Records) -> tuple[plt.Figure, str]:
     nf4 = sum(abs(v) < 0.25 for v in h["grids"]["NF4"])
     int4 = sum(abs(v) < 0.25 for v in h["grids"]["INT4 (textbook)"])
     caption = (
-        f"{share:.0%} of weights lie within ±0.25 of their group's max: NF4 puts {nf4} of its 16 levels "
-        f"there, uniform INT4 only {int4}; activations are harsher, with a token's typical value "
+        f"{share:.0%} of weights sit within a quarter of their group's max from zero: NF4 puts {nf4} of its "
+        f"16 levels there, uniform INT4 only {int4}; activations are harsher, with a token's typical value "
         f"{h['activation_abs_max_over_median']:,.0f}× below its max."
     )
     return fig, caption
@@ -129,7 +134,7 @@ def error_vs_bits(records: Records) -> tuple[plt.Figure, str]:
     seen = set()
     for m in c.values():
         e = m["entry"]
-        if e["method"] in ("bf16", "w8a8") or m["mean_kl"] <= 0:
+        if not _weight_quantizer(e):
             continue
         color, marker, name = _style(e)
         ax.scatter(
@@ -142,31 +147,29 @@ def error_vs_bits(records: Records) -> tuple[plt.Figure, str]:
             zorder=3,
         )
         seen.add(name)
-    for method, prefix in (("rtn", "rtn-int"), ("gptq", "gptq-int"), ("awq", "awq-int")):
-        line = sorted(
-            (m["bits_per_weight"], m["mean_kl"])
-            for n, m in c.items()
-            if n.startswith(prefix)
-            and "g128" in n
-            and m["entry"]["method"] == method
-            and not m["entry"].get("rotate")
-        )
-        if len(line) > 1:
-            ax.plot(*zip(*line, strict=True), color=METHOD_STYLE[method][0], alpha=0.6)
+    lines = {  # the same grid (g128) at 3 and 4 bits, per method
+        "rtn": ["rtn-int3-g128", "rtn-int4-g128"],
+        "gptq": ["gptq-int3-g128", "gptq-int4-g128"],
+        "awq": ["awq-int3-g128-clip", "awq-int4-g128-clip"],
+    }
+    for method, names in lines.items():
+        points = [(c[n]["bits_per_weight"], c[n]["mean_kl"]) for n in names if n in c]
+        if len(points) > 1:
+            ax.plot(*zip(*points, strict=True), color=METHOD_STYLE[method][0], alpha=0.6)
     ax.set(
         xlabel="bits per quantized weight (scales included)",
         ylabel="KL vs BF16 (nats/token, log)",
         yscale="log",
     )
     ax.legend(fontsize=8)
+    parts = []
+    if "rtn-int3-g128" in c and "rtn-int4-g128" in c:
+        step = c["rtn-int3-g128"]["mean_kl"] / c["rtn-int4-g128"]["mean_kl"]
+        parts.append(f"Going from 4 to 3 bits multiplies round-to-nearest's KL by {step:.0f}×")
     rtn, gptq = c.get("rtn-int4-g128-full"), c.get("gptq-int4-g128")
-    caption = "Every bit removed costs roughly an order of magnitude of KL"
     if rtn and gptq:
-        caption += (
-            f"; at 4 bits GPTQ reaches {gptq['mean_kl'] / rtn['mean_kl']:.0%} of round-to-nearest's KL "
-            "on the same grid"
-        )
-    return fig, caption + "."
+        parts.append(f"at 4 bits GPTQ keeps {gptq['mean_kl'] / rtn['mean_kl']:.0%} of it on the same grid")
+    return fig, "; ".join(parts) + "."
 
 
 def sensitivity_map(records: Records) -> tuple[plt.Figure, str]:
@@ -276,7 +279,7 @@ def pareto(records: Records) -> tuple[plt.Figure, str]:
     seen = set()
     for m in c.values():
         e = m["entry"]
-        if m["mean_kl"] <= 0 or e["method"] == "w8a8":
+        if not _weight_quantizer(e):
             continue
         color, marker, name = _style(e)
         ax.scatter(
@@ -289,9 +292,9 @@ def pareto(records: Records) -> tuple[plt.Figure, str]:
             label=None if name in seen else name,
         )
         seen.add(name)
-        points.append((m["model_gb"], m["mean_kl"], label(e)))
+        points.append((m["model_gb"], m["mean_kl"], label(e), m["bits_per_weight"]))
     frontier, best = [], float("inf")
-    for gb, kl, name in sorted(points):
+    for gb, kl, name, _ in sorted(points):
         if kl < best:
             frontier.append((gb, kl, name))
             best = kl
@@ -300,12 +303,12 @@ def pareto(records: Records) -> tuple[plt.Figure, str]:
         ax.axvline(c["bf16"]["model_gb"], color=BASELINE_GRAY, ls="--", label="BF16 size")
     ax.set(xlabel="model size (GB, embeddings in BF16)", ylabel="KL vs BF16 (log)", yscale="log")
     ax.legend(fontsize=8)
-    smallest = min(frontier, key=lambda p: p[0]) if frontier else None
+    four_bit = [(kl, name) for _, kl, name, bits in points if 4.0 <= bits <= 4.3]
+    (low, low_name), (high, high_name) = min(four_bit), max(four_bit)
     caption = (
-        f"The frontier's smallest point is {smallest[2]} at {smallest[0]:.2f} GB; below that, the BF16 "
-        "embedding (a quarter of the weights) sets a floor on size that no weight quantizer moves."
-        if smallest
-        else "No configurations."
+        f"At about 4 bits per weight the method decides the damage, from KL {high:.3g} ({high_name}) down "
+        f"to {low:.3g} ({low_name}); the smallest configuration still weighs {min(points)[0]:.2f} GB, mostly "
+        "its BF16 embedding."
     )
     return fig, caption
 
