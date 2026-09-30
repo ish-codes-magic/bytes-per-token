@@ -1,0 +1,31 @@
+{
+  "milestone": "M3",
+  "written_in_commit": "pending",
+  "note": "Written before quantizing any real model. KL is nats per token against BF16 nanoserve on WikiText-2 (test), Qwen3-0.6B unless stated. Reasoning is in docs/learning/M3-quant-reference.md, section 4.",
+  "predictions": [
+    {"id": "bf16_ppl", "label": "BF16 perplexity in nanoserve (vs Hugging Face in M2)", "low": 19.3, "high": 19.8},
+    {"id": "kl_int8_channel", "label": "KL, RTN INT8 per-channel", "low": 0.00005, "high": 0.002},
+    {"id": "kl_int4_g128", "label": "KL, RTN INT4 g128", "low": 0.05, "high": 0.25},
+    {"id": "channel_over_g128", "label": "KL ratio, RTN INT4 per-channel / g128 (x)", "low": 1.5, "high": 10},
+    {"id": "kl_int3_g128", "label": "KL, RTN INT3 g128", "low": 0.25, "high": 2},
+    {"id": "kl_int2_g64", "label": "KL, RTN INT2 g64 asymmetric", "low": 2, "high": 12},
+    {"id": "full_over_textbook", "label": "KL ratio, INT4 g128 full-range / textbook grid (x)", "low": 0.8, "high": 1.0},
+    {"id": "nf4_over_int4", "label": "KL ratio, NF4 / INT4 at block 64 (x)", "low": 0.5, "high": 0.95},
+    {"id": "kl_fp8_weight", "label": "KL, FP8 E4M3 weights per-channel", "low": 0.0005, "high": 0.01},
+    {"id": "gptq_over_rtn", "label": "KL ratio, GPTQ / RTN at INT4 g128 (x)", "low": 0.35, "high": 0.85},
+    {"id": "awq_over_rtn", "label": "KL ratio, AWQ / RTN at INT4 g128 (x)", "low": 0.4, "high": 0.9},
+    {"id": "gptq_over_library", "label": "KL ratio, our GPTQ / llm-compressor's (x)", "low": 0.85, "high": 1.15},
+    {"id": "awq_over_library", "label": "KL ratio, our AWQ / llm-compressor's (x)", "low": 0.8, "high": 1.25},
+    {"id": "rotation_gain_channel", "label": "KL ratio, rotated / plain RTN INT4 per-channel (x)", "low": 0.15, "high": 0.7},
+    {"id": "kl_w8a8_fp8_token", "label": "KL, W8A8 FP8 with per-token activations", "low": 0.002, "high": 0.03},
+    {"id": "kl_w8a8_int8_static", "label": "KL, W8A8 INT8 with a static per-tensor activation scale", "low": 0.5, "high": 10},
+    {"id": "smoothquant_gain", "label": "KL ratio, SmoothQuant / plain W8A8 INT8 static per-tensor (x)", "low": 0.02, "high": 0.5},
+    {"id": "outlier_ratio", "label": "Largest / median channel max in the residual stream (x)", "low": 100, "high": 10000},
+    {"id": "down_proj_share", "label": "Share of single-module INT4 KL from down_proj (%)", "low": 25, "high": 60},
+    {"id": "edge_layer_share", "label": "Share of single-module INT4 KL from the first two and last layers (%)", "low": 15, "high": 60},
+    {"id": "calib_8_over_128", "label": "KL ratio, GPTQ calibrated on 8 / 128 sequences (x)", "low": 1.0, "high": 1.4},
+    {"id": "calib_code_over_c4", "label": "KL ratio, GPTQ calibrated on code / on C4 (x)", "low": 1.0, "high": 1.4},
+    {"id": "calib_wiki_over_c4", "label": "KL ratio, GPTQ calibrated on WikiText / on C4 (x)", "low": 0.8, "high": 1.0},
+    {"id": "large_over_small_int4", "label": "KL ratio, RTN INT4 g128 on Qwen3-1.7B / 0.6B (x)", "low": 0.3, "high": 0.9}
+  ]
+}
