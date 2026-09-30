@@ -276,3 +276,39 @@ def fidelity_table(m4: Records) -> str:
         "Gap",
     ]
     return markdown_table(headers, rows)
+
+
+def gsm8k_failure_table(m4: Records, m2_quality: Records) -> str:
+    """How each format's GSM8K answers fail: shares of every bucket, plus the suite's score for comparison."""
+    from fastserve.quality.gsm8k import BUCKETS
+
+    found = {(m["model"], m["format"]): m for m in _newest(m4, "m4_gsm8k")}
+    rows = []
+    for model in (SMALL, LARGE):
+        for fmt in FORMATS:
+            m = found.get((model, fmt))
+            if not m:
+                continue
+            shares = [_f(100 * m["buckets"][b] / m["n"], 1, "%") for b in BUCKETS]
+            score = tasks(m4, m2_quality, model, fmt).get("gsm8k")
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    FORMAT_LABELS[fmt],
+                    *shares,
+                    _f(m["mean_words"], 0),
+                    _f(score, 1, "%"),
+                ]
+            )
+    headers = ["Model", "Format", *(b.capitalize() for b in BUCKETS), "Words per answer", "Suite score"]
+    return markdown_table(headers, rows)
+
+
+def gsm8k_example(m4: Records, model: str, fmt: str, bucket: str) -> str:
+    """The first logged answer of one failure bucket, as a quoted block."""
+    for m in reversed(_newest(m4, "m4_gsm8k")):
+        if m["model"] == model and m["format"] == fmt and m["examples"].get(bucket):
+            text = m["examples"][bucket][0].strip()
+            label = f"*{model.split('/')[-1]}, {FORMAT_LABELS[fmt]}, a {bucket!r} answer:*"
+            return label + "\n\n```text\n" + text + "\n```"
+    return f"*No {bucket!r} answer was logged for {model.split('/')[-1]} {FORMAT_LABELS[fmt]}.*"

@@ -62,3 +62,13 @@ def test_fidelity_compares_served_and_simulated_perplexity(m4_records):
     table = fidelity_table(m4_records)
     assert "| Qwen3-0.6B | FP8 W8A8 | 20.40 | 20.60 | 1.0% |" in table
     assert "| Qwen3-0.6B | BF16 | 20.00 | — | — |" in table  # no vLLM BF16 perplexity in this fixture
+
+
+def test_gsm8k_failures_show_bucket_shares_and_the_suite_score(m4_records, m2_quality):
+    from fastserve.report.m4 import gsm8k_example, gsm8k_failure_table
+
+    table = gsm8k_failure_table(m4_records, m2_quality)
+    assert "| Qwen3-0.6B | BF16 | 40.0% | 50.0% | 0.0% | 10.0% | 120 | 42.0% |" in table  # BF16 score from M2
+    assert "| Qwen3-0.6B | INT4 W4A16 (GPTQ) | 35.0% | 50.0% | 5.0% | 10.0% | 150 | 35.0% |" in table
+    assert "and again and again" in gsm8k_example(m4_records, "Qwen/Qwen3-0.6B", "gptq", "looping")
+    assert "No 'looping' answer" in gsm8k_example(m4_records, "Qwen/Qwen3-0.6B", "bf16", "looping")

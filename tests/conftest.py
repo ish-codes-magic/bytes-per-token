@@ -551,6 +551,26 @@ def m4_records() -> list[dict[str, Any]]:
                     "server_timeline": {"columns": columns, "rows": rows},
                 },
             )
+            int4 = fmt in ("gptq", "awq")  # 200 answers: INT4 loses 10 correct ones to loops
+            add(
+                "m4_gsm8k",
+                {
+                    "model": model,
+                    "format": fmt,
+                    "n": 200,
+                    "buckets": {
+                        "correct": 80 - 10 * int4,
+                        "wrong answer": 100,
+                        "looping": 10 * int4,
+                        "no final answer": 20,
+                    },
+                    "mean_words": 120.0 + 30 * int4,
+                    "examples": {
+                        "looping": ["and again and again"] if int4 else [],
+                        "wrong answer": ["#### 5"],
+                    },
+                },
+            )
             if fmt != "bf16":
                 add(
                     "m4_tasks",
