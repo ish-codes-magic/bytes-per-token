@@ -26,7 +26,7 @@
 ## Key results
 
 <!-- BEGIN GENERATED: m2_summary -->
-| Model | Chat TTFT p50 (ms) | Chat TPOT p50 (ms) | Single-stream tokens/s | Peak tokens/s | Knee (req/s) | $ / 1M tokens at peak | KV cache (tokens) |
+| Model | Chat TTFT p50 (ms) | Chat TPOT p50 (ms) | Single-stream tokens/s | Sweep peak tokens/s (run average) | Knee (req/s) | $ / 1M tokens at that peak | KV cache (tokens) |
 |---|---|---|---|---|---|---|---|
 | Qwen3-0.6B | 20.1 | 5.83 | 171 | 2,122 | 12 | 0.105 | 172,640 |
 | Qwen3-1.7B | 27.8 | 14.74 | 68 | 1,486 | 4 | 0.150 | 142,928 |

@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 2 (baselines). Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 2 (baselines) is in gate review. Results appear below as each milestone lands.
 
 ---
 
@@ -63,6 +63,36 @@ what dominates when nothing is optimized:
 
 Details are in the [M1 learning doc](docs/learning/M1-nanoserve.md) and the [gate report](docs/gates/M1-report.md).
 
+### M2: stock vLLM, measured under load
+
+The "before" picture every later technique is judged against: vLLM 0.30 in BF16, driven by an open- and
+closed-loop load generator, with vLLM's own Prometheus counters sampled throughout.
+
+<!-- BEGIN GENERATED: m2_summary -->
+| Model | Chat TTFT p50 (ms) | Chat TPOT p50 (ms) | Single-stream tokens/s | Sweep peak tokens/s (run average) | Knee (req/s) | $ / 1M tokens at that peak | KV cache (tokens) |
+|---|---|---|---|---|---|---|---|
+| Qwen3-0.6B | 20.1 | 5.83 | 171 | 2,122 | 12 | 0.105 | 172,640 |
+| Qwen3-1.7B | 27.8 | 14.74 | 68 | 1,486 | 4 | 0.150 | 142,928 |
+<!-- END GENERATED: m2_summary -->
+
+Held at saturation, the engine is far below the memory-bound ceiling, and the server's own counters show why:
+
+![vLLM held at saturation](results/figures/m2_saturation.png)
+
+<!-- BEGIN GENERATED: caption-m2_saturation -->
+*Held full for 252 s, Qwen3-0.6B decodes 1,849 tokens/s with 252 sequences running, at 54% of the memory-bound ceiling; once the queue drains and no new prompts arrive, steps run at 88% of it.*
+<!-- END GENERATED: caption-m2_saturation -->
+
+Two lessons shape the rest of the project:
+- **A busy decode step on these small models is mostly KV cache**, so throughput gains will come from KV-cache
+  engineering (M5) more than weight quantization (M4).
+- **Chunked prefill costs saturated decode about half its speed.** Decode-only steps already run near the memory
+  speed.
+
+A quality baseline (perplexity, GSM8K, MMLU, HumanEval, needle-in-a-haystack to 32k) sets the bar every lossy
+change must meet. Details are in the [M2 learning doc](docs/learning/M2-baselines.md) and the
+[gate report](docs/gates/M2-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -110,7 +140,7 @@ Two sizes from one family show **how each gain changes with model size**.
 |---|---|---|
 | M0 | Foundations: cloud environment, measured hardware roofline | ✅ Done |
 | M1 | nanoserve: inference from scratch, prefill vs decode | ✅ Done |
-| M2 | Baselines: vLLM benchmarks + quality harness | 🚧 In progress |
+| M2 | Baselines: vLLM benchmarks + quality harness | 🔍 Gate review |
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ⏳ |
 | M4 | Quantization in production: format crossover vs batch size | ⏳ |
 | M5 | KV-cache quantization and prefix caching | ⏳ |
@@ -141,6 +171,8 @@ uv run --only-group local modal setup                        # log in to Modal o
 uv run --only-group local modal run infra/modal_app.py::test       # CPU tests
 uv run --only-group local modal run infra/modal_app.py::test_gpu   # GPU tests on an NVIDIA L4
 uv run --only-group local modal run infra/modal_app.py::probe      # measure the GPU -> results/raw/
+uv run --only-group local modal run infra/modal_app.py::m2         # vLLM serving baselines -> results/raw/
+uv run --only-group local modal run infra/modal_app.py::m2q        # quality baselines -> results/raw/
 uv run --only-group local modal run infra/modal_app.py::figures    # draw -> results/figures/
 uv run --only-group local python scripts/render_docs.py            # refresh generated tables in the docs
 ```
