@@ -53,3 +53,36 @@ def tasks_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 TASKS = {"perplexity": perplexity_task, "needle": needle_task, "tasks": tasks_task}
+
+
+def vllm_perplexity_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Perplexity on M2's WikiText-2 windows, computed by vLLM itself from prompt logprobs (its real kernels).
+
+    Compared with nanoserve's perplexity of the same checkpoint's rounded weights, it shows whether the
+    low-bit kernel computes what the checkpoint says, independently of how good the quantization is.
+    """
+    import math
+
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
+
+    from fastserve.quality.perplexity import token_windows
+    from fastserve.quality.text import wikitext_eval_ids
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    windows = token_windows(wikitext_eval_ids(tokenizer), cfg["window"], cfg["max_windows"])
+    llm = LLM(model=model_path, max_model_len=cfg["window"] + 16, gpu_memory_utilization=0.85, seed=0)
+    outputs = llm.generate(
+        [{"prompt_token_ids": w.tolist()} for w in windows], SamplingParams(max_tokens=1, prompt_logprobs=0)
+    )
+    nll, positions = 0.0, 0
+    for window, out in zip(windows, outputs, strict=True):
+        for token, logprobs in zip(window.tolist()[1:], out.prompt_logprobs[1:], strict=True):
+            nll -= logprobs[token].logprob  # the true next token's log-probability
+            positions += 1
+    return {
+        "window": cfg["window"],
+        "windows": len(windows),
+        "positions": positions,
+        "perplexity": math.exp(nll / positions),
+    }
