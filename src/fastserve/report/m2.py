@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import statistics
 from typing import Any
 
 from fastserve.hw.analysis import metrics_of
@@ -235,4 +236,49 @@ def offline_table(offline: Records, serving: Records) -> str:
             ]
         )
     headers = ["Model", "Engine alone (tokens/s)", "Served peak (tokens/s)", "Served / engine"]
+    return markdown_table(headers, rows)
+
+
+def prefill_flops(cfg: Any, length: int) -> float:
+    """FLOPs to prefill `length` tokens.
+
+    Every layer weight once per token, the LM head once (last token only), and causal attention: QKᵀ and PV
+    over half of the length × length matrix, as FlashAttention computes it.
+    """
+    embed = cfg.vocab_size * cfg.hidden_size
+    layer_params = cfg.num_params() - embed - (0 if cfg.tie_word_embeddings else embed)
+    attention = 2 * cfg.num_heads * cfg.head_dim * length * length * cfg.num_layers
+    return 2 * layer_params * length + 2 * embed + attention
+
+
+def prefill_efficiency_table(records: Records, configs: dict[str, Any], peak_flops: float) -> str:
+    """Single-user long-context prefill: how many TFLOP/s the GPU actually delivers (TTFT ≈ prefill time)."""
+    rows = []
+    for model, cfg in configs.items():
+        for workload in ("long_8k", "long_16k", "long_32k"):
+            for m in runs(records, model=model, workload=workload):
+                table = m["requests"]
+                length = round(
+                    statistics.median(r[table["columns"].index("prompt_len")] for r in table["rows"])
+                )
+                seconds = _p(m["summary"], "ttft_ms") / 1e3
+                flops = prefill_flops(cfg, length)
+                rows.append(
+                    [
+                        model.split("/")[-1],
+                        f"{length:,}",
+                        _fmt(seconds * 1e3),
+                        _fmt(flops / 1e12, 1),
+                        _fmt(flops / seconds / 1e12, 1),
+                        f"{flops / seconds / peak_flops:.0%}",
+                    ]
+                )
+    headers = [
+        "Model",
+        "Prompt tokens",
+        "TTFT p50 (ms)",
+        "Prefill TFLOP",
+        "Effective TFLOP/s",
+        "% of M0 BF16 peak",
+    ]
     return markdown_table(headers, rows)

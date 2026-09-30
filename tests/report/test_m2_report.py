@@ -53,3 +53,18 @@ def test_offline_table_compares_engine_with_served_peak(m2_records):
         }
     ]
     assert "| Qwen3-0.6B | 8,000 | 4,000 | 50% |" in offline_table(offline, m2_records)
+
+
+def test_prefill_efficiency_uses_causal_attention_flops(m2_records):
+    import json
+    from pathlib import Path
+
+    from fastserve.engine.config import ModelConfig
+    from fastserve.report.m2 import prefill_efficiency_table, prefill_flops
+
+    path = Path(__file__).parents[2] / "benchmarks" / "models" / "Qwen3-0.6B.config.json"
+    cfg = ModelConfig.from_hf(json.loads(path.read_text(encoding="utf-8")))
+    # attention share grows with length: at 32k it's a noticeable part of the total
+    assert prefill_flops(cfg, 32768) > 2 * prefill_flops(cfg, 16384)
+    table = prefill_efficiency_table(m2_records, {"Qwen/Qwen3-0.6B": cfg}, peak_flops=57e12)
+    assert table.count("| Qwen3-0.6B |") == 3 and "| 100 |" in table  # the fake runs use 100-token prompts
