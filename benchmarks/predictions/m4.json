@@ -1,0 +1,26 @@
+{
+  "milestone": "M4",
+  "written_in_commit": "pending",
+  "note": "Written before any M4 checkpoint was made or served. Speedups are BF16 time / quantized time (higher is faster). Reasoning is in docs/learning/M4-quant-production.md, section 4.",
+  "predictions": [
+    {"id": "b1_fp8_small", "label": "Batch-1 decode speedup, FP8 over BF16, Qwen3-0.6B (x)", "low": 1.1, "high": 1.5},
+    {"id": "b1_int4_small", "label": "Batch-1 decode speedup, INT4 GPTQ over BF16, Qwen3-0.6B (x)", "low": 1.2, "high": 1.8},
+    {"id": "b1_fp8_large", "label": "Batch-1 decode speedup, FP8 over BF16, Qwen3-1.7B (x)", "low": 1.3, "high": 1.7},
+    {"id": "b1_int4_large", "label": "Batch-1 decode speedup, INT4 GPTQ over BF16, Qwen3-1.7B (x)", "low": 1.5, "high": 2.4},
+    {"id": "int4_over_fp8_b1", "label": "Decode throughput, INT4 / FP8 at batch 1, Qwen3-1.7B (x)", "low": 1.1, "high": 1.6},
+    {"id": "int4_over_fp8_b256", "label": "Decode throughput, INT4 / FP8 at batch 256, Qwen3-1.7B (x)", "low": 0.6, "high": 1.0},
+    {"id": "awq_over_gptq_speed", "label": "Batch-1 decode speed, AWQ / GPTQ checkpoint, Qwen3-1.7B (x)", "low": 0.95, "high": 1.05},
+    {"id": "int8_over_fp8_b1", "label": "Batch-1 decode speed, INT8 W8A8 / FP8, Qwen3-1.7B (x)", "low": 0.85, "high": 1.1},
+    {"id": "sat_fp8_small", "label": "Saturated throughput, FP8 / BF16, Qwen3-0.6B (x)", "low": 0.95, "high": 1.2},
+    {"id": "sat_int4_small", "label": "Saturated throughput, INT4 GPTQ / BF16, Qwen3-0.6B (x)", "low": 0.8, "high": 1.05},
+    {"id": "ttft8k_fp8_large", "label": "TTFT at 8k tokens, FP8 / BF16, Qwen3-1.7B (x)", "low": 0.55, "high": 0.9},
+    {"id": "ttft8k_int4_large", "label": "TTFT at 8k tokens, INT4 GPTQ / BF16, Qwen3-1.7B (x)", "low": 0.95, "high": 1.4},
+    {"id": "kv_fp8_small", "label": "KV-cache tokens, FP8 / BF16, Qwen3-0.6B (x)", "low": 1.0, "high": 1.05},
+    {"id": "kv_fp8_large", "label": "KV-cache tokens, FP8 / BF16, Qwen3-1.7B (x)", "low": 1.03, "high": 1.12},
+    {"id": "gsm8k_fp8_small", "label": "GSM8K change, FP8 vs BF16, Qwen3-0.6B (points)", "low": -3, "high": 3},
+    {"id": "gsm8k_int4_small", "label": "GSM8K change, INT4 GPTQ vs BF16, Qwen3-0.6B (points)", "low": -15, "high": -3},
+    {"id": "gsm8k_int4_large", "label": "GSM8K change, INT4 GPTQ vs BF16, Qwen3-1.7B (points)", "low": -10, "high": -1},
+    {"id": "kl_fp8_library_over_ours", "label": "KL ratio, llm-compressor FP8 / our M3 FP8 W8A8, Qwen3-0.6B (x)", "low": 0.8, "high": 1.25},
+    {"id": "kl_int8_library", "label": "KL, llm-compressor INT8 W8A8 (SmoothQuant + GPTQ), Qwen3-0.6B", "low": 0.005, "high": 0.03}
+  ]
+}
