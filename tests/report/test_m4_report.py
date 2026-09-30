@@ -72,3 +72,24 @@ def test_gsm8k_failures_show_bucket_shares_and_the_suite_score(m4_records, m2_qu
     assert "| Qwen3-0.6B | INT4 W4A16 (GPTQ) | 35.0% | 50.0% | 5.0% | 10.0% | 150 | 35.0% |" in table
     assert "and again and again" in gsm8k_example(m4_records, "Qwen/Qwen3-0.6B", "gptq", "looping")
     assert "No 'looping' answer" in gsm8k_example(m4_records, "Qwen/Qwen3-0.6B", "bf16", "looping")
+
+
+def test_bytes_model_counts_the_bf16_head_and_fits_overhead_on_bf16(m4_records):
+    from types import SimpleNamespace
+
+    from fastserve.report.m4 import bytes_model_table, crossover_table, step_bytes
+
+    # 1,000 linear weights + a tied 10×10 head/embedding; 1 KV byte per token
+    cfg = SimpleNamespace(
+        vocab_size=10,
+        hidden_size=10,
+        tie_word_embeddings=True,
+        num_params=lambda: 1_100,
+        kv_bytes_per_token=lambda: 1.0,
+    )
+    assert step_bytes(cfg, "bf16", context=4) == 1_000 * 2 + 100 * 2 + 4
+    assert step_bytes(cfg, "gptq", context=0) == 1_000 * 4.125 / 8 + 200
+    configs = {"Qwen/Qwen3-0.6B": cfg, "Qwen/Qwen3-1.7B": cfg}
+    table = bytes_model_table(m4_records, configs, bandwidth=1e9)
+    assert "| Qwen3-0.6B | BF16 |" in table and "| 0.0% |" in table  # the overhead is fitted on BF16
+    assert "| 1 | 1.33× | 1.33× |" in crossover_table(m4_records, batches=(1,))  # 2.0 / 1.5

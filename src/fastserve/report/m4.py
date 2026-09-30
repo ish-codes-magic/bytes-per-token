@@ -22,6 +22,10 @@ FORMAT_LABELS = {
     "awq": "INT4 W4A16 (AWQ)",
 }
 DASH = "—"
+# Bytes per linear-layer weight, scales included: INT4 stores a 16-bit scale per group of 128 (4.125 bits);
+# FP8/INT8's one scale per output channel is negligible.
+BYTES_PER_WEIGHT = {"bf16": 2.0, "fp8": 1.0, "int8": 1.0, "gptq": 4.125 / 8, "awq": 4.125 / 8}
+DECODE_CONTEXT = 128 + 128  # the decode workload: a 128-token prompt, halfway through a 256-token answer
 
 
 def _newest(records: Records, experiment: str) -> list[dict[str, Any]]:
@@ -312,3 +316,68 @@ def gsm8k_example(m4: Records, model: str, fmt: str, bucket: str) -> str:
             label = f"*{model.split('/')[-1]}, {FORMAT_LABELS[fmt]}, a {bucket!r} answer:*"
             return label + "\n\n```text\n" + text + "\n```"
     return f"*No {bucket!r} answer was logged for {model.split('/')[-1]} {FORMAT_LABELS[fmt]}.*"
+
+
+def step_bytes(cfg: Any, fmt: str, batch: int = 1, context: int = DECODE_CONTEXT) -> float:
+    """Bytes one decode step reads: the quantized linear layers, the LM head (always BF16), and the KV cache.
+
+    The embedding is only gathered (a few rows per step), so it isn't counted; with tied embeddings it is the
+    LM head's matrix, read in full every step.
+    """
+    matrix = cfg.vocab_size * cfg.hidden_size
+    linear = cfg.num_params() - matrix * (1 if cfg.tie_word_embeddings else 2)
+    return linear * BYTES_PER_WEIGHT[fmt] + 2 * matrix + batch * context * cfg.kv_bytes_per_token()
+
+
+def bytes_model_table(m4: Records, configs: dict[str, Any], bandwidth: float) -> str:
+    """Batch-1 decode TPOT predicted from bytes alone, against the measurement.
+
+    predicted = bytes / measured bandwidth + a fixed overhead, fitted once per model on BF16 (everything in
+    BF16's step that streaming doesn't explain). If a format's kernel only saves bytes, the error stays small.
+    """
+    rows = []
+    for model in (SMALL, LARGE):
+        cfg = configs[model]
+        measured = {}
+        for fmt in FORMATS:
+            m = serving(m4, model, fmt, "decode", concurrency=1)
+            measured[fmt] = m["summary"]["tpot_ms"]["p50"] if m else None
+        if measured["bf16"] is None:
+            continue
+        overhead = measured["bf16"] - 1e3 * step_bytes(cfg, "bf16") / bandwidth
+        for fmt in FORMATS:
+            streaming = 1e3 * step_bytes(cfg, fmt) / bandwidth
+            predicted, got = streaming + overhead, measured[fmt]
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    FORMAT_LABELS[fmt],
+                    _f(step_bytes(cfg, fmt) / 1e9, 2),
+                    _f(streaming, 2),
+                    _f(predicted, 2),
+                    _f(got, 2),
+                    _f(None if got is None else 100 * (got / predicted - 1), 1, "%"),
+                ]
+            )
+    headers = [
+        "Model",
+        "Format",
+        "GB read per step",
+        "Streaming (ms)",
+        "Predicted TPOT (ms)",
+        "Measured TPOT (ms)",
+        "Error",
+    ]
+    return markdown_table(headers, rows)
+
+
+def crossover_table(m4: Records, batches: tuple[int, ...] = (1, 4, 16, 64, 256)) -> str:
+    """INT4 (GPTQ) decode throughput ÷ FP8's at each batch: above 1, fewer bytes win; below 1, faster math."""
+    rows = []
+    for batch in batches:
+        ratios = [
+            _ratio(decode_tok_s(m4, model, "gptq", batch), decode_tok_s(m4, model, "fp8", batch))
+            for model in (SMALL, LARGE)
+        ]
+        rows.append([str(batch), *(_f(r, 2, "×") for r in ratios)])
+    return markdown_table(["Batch", "Qwen3-0.6B: INT4 ÷ FP8", "Qwen3-1.7B: INT4 ÷ FP8"], rows)

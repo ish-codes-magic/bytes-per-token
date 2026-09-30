@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from fastserve.report.m4 import (
+    BYTES_PER_WEIGHT,
+    DECODE_CONTEXT,
     FORMAT_LABELS,
     FORMATS,
     LARGE,
@@ -29,7 +31,6 @@ STYLE = {
     "gptq": (OKABE_ITO["orange"], "^"),
     "awq": (OKABE_ITO["vermillion"], "v"),
 }
-BYTES_PER_WEIGHT = {"bf16": 2.0, "fp8": 1.0, "int8": 1.0, "gptq": 4.125 / 8, "awq": 4.125 / 8}
 
 
 def speedup_vs_batch(m4: Records) -> tuple[plt.Figure, str]:
@@ -76,7 +77,7 @@ def roofline(m4: Records, configs: dict[str, Any], hw: dict[str, float]) -> tupl
     cfg = configs[LARGE]
     head = cfg.vocab_size * cfg.hidden_size  # the tied LM head, read in BF16 every step
     linear = cfg.num_params() - head
-    kv_per_token, context = cfg.kv_bytes_per_token(), 128 + 128  # decode workload: 128 prompt + ~half of 256
+    kv_per_token, context = cfg.kv_bytes_per_token(), DECODE_CONTEXT
     fig, ax = plt.subplots(figsize=(8, 5))
     intensity = np.logspace(0, 3.5, 200)
     ax.plot(
