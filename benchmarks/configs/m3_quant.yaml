@@ -1,0 +1,87 @@
+# M3: quantization from scratch. Run: uv run --only-group local modal run infra/modal_app.py::m3
+# Each section of `tasks` runs in its own L4 container; `library` checkpoints are made first, in the llm-compressor image.
+model: Qwen/Qwen3-0.6B
+eval: {window: 2048, max_windows: 40}             # WikiText-2 test: the same windows as M2's perplexity baseline
+calibration: {source: c4, samples: 128, seq_len: 2048}   # the standard GPTQ/AWQ calibration set
+
+# llm-compressor 0.14.0 at its defaults (W4A16: INT4 g128, symmetric, full-range grid)
+library:
+  - {name: Qwen3-0.6B-gptq, method: gptq, model: Qwen/Qwen3-0.6B}
+  - {name: Qwen3-0.6B-awq, method: awq, model: Qwen/Qwen3-0.6B}
+
+# Entry keys: method (bf16 | rtn | nf4 | fp8_weight | gptq | awq | w8a8 | library), bits, granularity (group),
+# group_size (128), symmetric (true), full_range (false), rotate (false), calibration/samples (the defaults above).
+tasks:
+  grids:                                          # round-to-nearest and fixed formats: no calibration data
+    - {name: bf16, method: bf16}
+    - {name: rtn-int8-channel, method: rtn, bits: 8, granularity: channel}
+    - {name: rtn-int4-tensor, method: rtn, bits: 4, granularity: tensor}
+    - {name: rtn-int4-channel, method: rtn, bits: 4, granularity: channel}
+    - {name: rtn-int4-g128, method: rtn, bits: 4}
+    - {name: rtn-int4-g64, method: rtn, bits: 4, group_size: 64}
+    - {name: rtn-int4-g32, method: rtn, bits: 4, group_size: 32}
+    - {name: rtn-int4-g128-asym, method: rtn, bits: 4, symmetric: false}
+    - {name: rtn-int4-g128-full, method: rtn, bits: 4, full_range: true}
+    - {name: rtn-int3-g128, method: rtn, bits: 3}
+    - {name: rtn-int3-g128-asym, method: rtn, bits: 3, symmetric: false}
+    - {name: rtn-int2-g64-asym, method: rtn, bits: 2, group_size: 64, symmetric: false}
+    - {name: nf4-b64, method: nf4, block_size: 64}
+    - {name: fp8-weight-channel, method: fp8_weight, granularity: channel}
+
+  gptq:                                           # at llm-compressor's settings unless the name says otherwise
+    - {name: gptq-int4-g128, method: gptq, bits: 4, full_range: true}
+    - {name: gptq-int4-g128-trueseq, method: gptq, bits: 4, full_range: true, true_sequential: true}
+    - {name: gptq-int3-g128, method: gptq, bits: 3, full_range: true}
+    - {name: gptq-int4-channel, method: gptq, bits: 4, granularity: channel, full_range: true}
+
+  awq:
+    - {name: awq-int4-g128, method: awq, bits: 4, full_range: true}   # llm-compressor's settings: duo, no clip
+    - {name: awq-int4-g128-clip, method: awq, bits: 4, full_range: true, clip: true}  # AutoAWQ's
+    - {name: awq-int4-g128-paper, method: awq, bits: 4, full_range: true, duo_scaling: false, clip: true}
+    - {name: awq-int3-g128-clip, method: awq, bits: 3, full_range: true, clip: true}
+
+  rotation:                                       # a random Hadamard rotation of the residual stream first
+    - {name: rot-rtn-int4-channel, method: rtn, bits: 4, granularity: channel, rotate: true}
+    - {name: rot-rtn-int4-g128, method: rtn, bits: 4, rotate: true}
+    - {name: rot-gptq-int4-g128, method: gptq, bits: 4, full_range: true, rotate: true}
+    - {name: rot-w8a8-int8-tensor-static, method: w8a8, format: int8, act: tensor, static: true, rotate: true, samples: 32}
+
+  w8a8:                                           # 8-bit weights (per output channel) and 8-bit activations
+    - {name: w8a8-fp8-tensor-static, method: w8a8, format: fp8, act: tensor, static: true, samples: 32}
+    - {name: w8a8-fp8-tensor, method: w8a8, format: fp8, act: tensor}
+    - {name: w8a8-fp8-token, method: w8a8, format: fp8, act: token}
+    - {name: w8a8-int8-tensor-static, method: w8a8, format: int8, act: tensor, static: true, samples: 32}
+    - {name: w8a8-int8-token, method: w8a8, format: int8, act: token}
+    - {name: sq-w8a8-int8-tensor-static, method: w8a8, format: int8, act: tensor, static: true, smooth: 0.5, samples: 32}
+    - {name: sq-w8a8-int8-token, method: w8a8, format: int8, act: token, smooth: 0.5, samples: 32}
+
+  calibration:                                    # GPTQ INT4 g128 again, with other calibration data (C4 × 128 is gptq-int4-g128)
+    - {name: calib-c4-8, method: gptq, bits: 4, full_range: true, samples: 8}
+    - {name: calib-c4-32, method: gptq, bits: 4, full_range: true, samples: 32}
+    - {name: calib-wikitext, method: gptq, bits: 4, full_range: true, calibration: wikitext}
+    - {name: calib-code, method: gptq, bits: 4, full_range: true, calibration: code}
+    - {name: calib-math, method: gptq, bits: 4, full_range: true, calibration: math}
+    - {name: calib-german, method: gptq, bits: 4, full_range: true, calibration: german}
+
+  library_eval:                                   # llm-compressor's checkpoints, scored exactly like ours
+    - {name: library-gptq-int4-g128, method: library, checkpoint: Qwen3-0.6B-gptq, bits: 4, full_range: true}
+    - {name: library-awq-int4-g128, method: library, checkpoint: Qwen3-0.6B-awq, bits: 4, full_range: true}
+
+  analyses:
+    outliers: {samples: 16}                       # per-channel maxima over 16 × 2,048 calibration tokens
+    histograms: {layer: 14}                       # a middle layer
+    trace: {layer: 1, module: q_proj, rows: 16, cols: 32, bits: 3}   # GPTQ in motion on a slice of a real layer
+
+  sensitivity: {bits: 4, windows: 4}              # RTN INT4 g128 on one linear at a time; KL on 4 windows
+
+  large:                                          # the same headline configurations on Qwen3-1.7B
+    model: Qwen/Qwen3-1.7B
+    entries:
+      - {name: bf16, method: bf16}
+      - {name: rtn-int8-channel, method: rtn, bits: 8, granularity: channel}
+      - {name: rtn-int4-g128, method: rtn, bits: 4}
+      - {name: rtn-int4-g128-full, method: rtn, bits: 4, full_range: true}
+      - {name: gptq-int4-g128, method: gptq, bits: 4, full_range: true}
+      - {name: awq-int4-g128, method: awq, bits: 4, full_range: true}
+      - {name: w8a8-fp8-token, method: w8a8, format: fp8, act: token}
+      - {name: sq-w8a8-int8-tensor-static, method: w8a8, format: int8, act: tensor, static: true, smooth: 0.5, samples: 32}
