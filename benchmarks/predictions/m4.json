@@ -1,6 +1,6 @@
 {
   "milestone": "M4",
-  "written_in_commit": "pending",
+  "written_in_commit": "10349dd",
   "note": "Written before any M4 checkpoint was made or served. Speedups are BF16 time / quantized time (higher is faster). Reasoning is in docs/learning/M4-quant-production.md, section 4.",
   "predictions": [
     {"id": "b1_fp8_small", "label": "Batch-1 decode speedup, FP8 over BF16, Qwen3-0.6B (x)", "low": 1.1, "high": 1.5},
