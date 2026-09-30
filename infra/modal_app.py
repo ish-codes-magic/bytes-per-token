@@ -288,12 +288,19 @@ def m2q(config: str = "benchmarks/configs/m2_quality.yaml", tasks: str = "perple
     models = ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B"]
     calls = [m2_quality_task.spawn(task, model, config, git) for task in tasks.split(",") for model in models]
     out = REPO / "results" / "raw" / "m2_quality.jsonl"
-    for call in calls:
-        records = call.get()
+    failed = 0
+    for call in calls:  # collect each separately: one failure mustn't discard the others' results
+        try:
+            records = call.get()
+        except Exception as err:  # the remote traceback is already in the log above
+            failed += 1
+            print(f"FAILED: {type(err).__name__}: {str(err).splitlines()[0][:200]}")
+            continue
         first = records[0]
-        print(
-            f"wrote {append_jsonl(out, records)} record(s): {first['experiment']} {first['metrics']['model']}"
-        )
+        name = f"{first['experiment']} {first['metrics']['model']}"
+        print(f"wrote {append_jsonl(out, records)} record(s): {name}")
+    if failed:
+        raise SystemExit(f"{failed} quality task(s) failed")
 
 
 @app.local_entrypoint()
