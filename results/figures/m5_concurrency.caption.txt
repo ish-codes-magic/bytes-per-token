@@ -1,0 +1,1 @@
+In the L4's 18.4 GiB KV budget, FP8 fits twice the sequences of BF16 and INT4 KIVI 3.5×; only eviction keeps the count flat as contexts grow. With 4k-token prompts vLLM ran 39 (BF16) vs 70 (FP8).

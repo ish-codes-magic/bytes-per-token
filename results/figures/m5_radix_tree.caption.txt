@@ -1,0 +1,1 @@
+128 prompts (271,159 tokens) collapse into 39,235 distinct tokens: each app's system prompt is computed once, and 86% of all prompt tokens could come from the cache.

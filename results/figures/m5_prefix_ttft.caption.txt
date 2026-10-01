@@ -1,0 +1,1 @@
+Prefix caching on the multi-turn workload: Qwen3-0.6B: TTFT p50 222 → 60 ms, prefill 85% smaller; Qwen3-1.7B: TTFT p50 479 → 135 ms, prefill 85% smaller.

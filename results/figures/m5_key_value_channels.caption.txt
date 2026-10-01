@@ -1,0 +1,1 @@
+Keys have outlier channels, values don't: in the median layer the largest key channel is 8.3× the median one, against 2.1× for values, so one scale per token wastes the grid on keys.

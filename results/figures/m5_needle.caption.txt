@@ -1,0 +1,1 @@
+Every policy keeps the needle except INT4, per token (0%), INT4, rotated keys (51%), INT2 KIVI (48%), StreamingLLM, 1,024 kept (32%).

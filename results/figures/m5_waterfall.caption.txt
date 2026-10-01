@@ -1,0 +1,1 @@
+Waterfall v2, Qwen3-0.6B, the cheapest setup against BF16: saturated server -54% (FP8 KV; the FlashInfer kernel alone -31%); 96 users, 4k prompts -45% (FP8 weights + FP8 KV; the FlashInfer kernel alone -15%); multi-turn chat -40% (prefix caching).
