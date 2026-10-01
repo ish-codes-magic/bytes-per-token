@@ -273,14 +273,15 @@ def lossless_table(m6: Records) -> str:
     Chi-square on the first token against each sampler's own pass and against the reference pass, how far
     apart those passes put the distribution (no sampling involved), and TV on the whole sampled prefix.
     """
-    rows, length = [], 0
+    rows = []
     for dtype, name in DTYPES:
         for m in lossless_runs(m6, dtype):
-            length, last, paths = len(m["prefixes"]), m["prefixes"][-1], m.get("path_tv") or {}
+            last, paths = m["prefixes"][-1], m.get("path_tv") or {}
             rows.append(
                 [
                     name,
                     TASK_LABELS[m["task"]],
+                    f"{m['samples']:,} × {len(m['prefixes'])}",
                     _f(paths.get("speculative_vs_plain"), 3),
                     _f(m.get("chi_square_own"), 0),
                     _f(m.get("chi_square_plain_own"), 0),
@@ -293,12 +294,13 @@ def lossless_table(m6: Records) -> str:
     headers = [
         "Arithmetic",
         "Prompt",
+        "Samples × tokens",
         "TV between the two samplers' passes",
         "χ², speculative vs its own pass",
         "χ², plain vs its own pass",
         "χ², speculative vs the reference pass",
         "5σ limit",
-        f"TV over {length} tokens, speculative vs plain samples",
+        "TV, speculative vs plain samples",
         "TV, plain vs plain samples",
     ]
     return markdown_table(headers, rows)

@@ -356,7 +356,7 @@ def run_task(
                 target.to(getattr(torch, dtype))
                 draft.to(getattr(torch, dtype))
                 batch = spec["plain_batch"][dtype]
-                for t in ref["tasks"]:
+                for t in spec.get("tasks", ref["tasks"]):
                     metrics = lossless(
                         target,
                         draft,

@@ -25,6 +25,10 @@ tasks:                                            # one container each
   loop: {kind: loop, draft: small, k: 4, prompts_per_task: 4, max_new_tokens: 96, dtypes: [bfloat16, float32]}
   lossless: {kind: lossless, draft: small, k: 3, samples: 600, tokens: 3, dtypes: [bfloat16, float32],
              plain_batch: {bfloat16: 50, float32: 20}}   # float32 doubles every KV cache
+  # A follow-up: float32 speculative sampling scored exactly at the 5σ limit on the chat prompt with 600 samples.
+  # A real bias grows with the sample size; chance doesn't. 3,000 first-token samples decide.
+  lossless_check: {kind: lossless, draft: small, k: 3, samples: 3000, tokens: 1, dtypes: [float32],
+                   tasks: [chat], plain_batch: {float32: 20}}
   timing: {kind: timing, draft: small}
 
 # ---- production: vLLM (read by experiments/m2.run_serving) ---------------------------------------------

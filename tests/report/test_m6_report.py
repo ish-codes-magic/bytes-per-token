@@ -49,7 +49,7 @@ def test_tables(m6_records):
     agreement = agreement_table(m6_records)
     assert "| Qwen3-0.6B | Code | 70.0% | 80.0% | 60.0% | 1.70 |" in agreement
     assert "| N-gram lookup | All tasks | — | — | — | 1.20 |" in agreement
-    assert "| BF16 | Chat | — | — | — | 50 | 85 | 0.200 | 0.200 |" in lossless_table(m6_records)
+    assert "| BF16 | Chat | 1,000 × 2 | — | — | — | 50 | 85 | 0.200 | 0.200 |" in lossless_table(m6_records)
     # every request decodes 99 tokens in 0.9 s (9.1 ms per step); 100 passes per load take 3.6 s (36 ms each)
     costs = round_cost_table(m6_records)
     assert "| BF16 | Qwen3-0.6B drafter, k = 3 | 9.1 | 36.0 | 9.0 | 0.99 | 3.96 | 1.20× |" in costs
