@@ -112,8 +112,12 @@ def key_value_channels(m5: Records, layer: str = "14") -> tuple[plt.Figure, str]
     k, v = _median(stats["key_ratio"]), _median(stats["value_ratio"])
     caption = (
         f"Keys have outlier channels, values don't: in the median layer the largest key channel is {k:.1f}× "
-        f"the median one, against {v:.1f}× for values, so one scale per token wastes the grid on keys."
+        f"the median one, against {v:.1f}× for values, so one scale per token wastes the grid on keys"
     )
+    if "0" in stats["profiles"]:
+        peak = max(max(head) for head in stats["profiles"]["0"]["keys"])
+        caption += f"; layer 0's largest key reaches |{peak:.0f}| (FP8 E4M3 tops out at 448)"
+    caption += "."
     return fig, caption
 
 
