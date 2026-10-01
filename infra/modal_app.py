@@ -532,6 +532,9 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
             r"Maximum concurrency for",
             r"cached_tokens",
             r"fp8.*kv cache|kv cache.*fp8",
+            r"VLLM_ATTENTION_BACKEND",
+            r"--attention-backend|attention_backend:",
+            r"Using \S+ backend",
         ]
         root = Path(vllm.__file__).parent
         for path in sorted(root.rglob("*.py")):
