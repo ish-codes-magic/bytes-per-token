@@ -1,5 +1,8 @@
 # Gate Report: M5, KV-cache engineering
 
+> **Gate decision (2026-10-01):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.5-kv-cache`.
+
 ## What was built
 
 - **A KV sizing model** ([`kv/sizing.py`](../../src/fastserve/kv/sizing.py), stdlib only): bytes per token in
