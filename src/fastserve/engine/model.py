@@ -46,6 +46,7 @@ class Attention(nn.Module):
         self.o_proj = nn.Linear(cfg.num_heads * hd, d, bias=bias)
         self.q_norm = RMSNorm(hd, cfg.rms_norm_eps)  # QK-norm: normalizes each head's vector
         self.k_norm = RMSNorm(hd, cfg.rms_norm_eps)
+        self.kv_policy = None  # M5: what a quantized or evicting cache keeps (fastserve.kv.quant)
 
     def forward(
         self,
@@ -67,9 +68,14 @@ class Attention(nn.Module):
         v = self.v_proj(x).view(b, q_len, self.cfg.num_kv_heads, hd).transpose(1, 2)  # [B, Hkv, Q, D]
         q, k = rope.apply(q, cos, sin), rope.apply(k, cos, sin)
 
+        if self.kv_policy is not None:  # round K, V to the cache's format, as it would store them
+            k, v = self.kv_policy.store(k, v)
         if cache is not None:  # store this step's keys/values; get back everything so far: [B, Hkv, T, D]
             k, v = cache.update(self.layer_idx, k, v, meta)
-        out = attention(q, k, v, causal_mask(positions, k.shape[2]), scale=hd**-0.5)  # [B, Hq, Q, D]
+        mask = causal_mask(positions, k.shape[2])
+        if self.kv_policy is not None:  # an evicting cache no longer holds some slots
+            mask = self.kv_policy.visible(mask, positions)
+        out = attention(q, k, v, mask, scale=hd**-0.5)  # [B, Hq, Q, D]
         return self.o_proj(out.transpose(1, 2).reshape(b, q_len, -1))
 
 
