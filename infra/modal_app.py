@@ -344,28 +344,19 @@ def m4_decompress_check(fmt: str, model: str, config_path: str, run_id: str, git
     unequal = [k for k in shared if not torch.equal(ours[k], library[k].to(ours[k].dtype))]
     max_diff = max(((ours[k].float() - library[k].float()).abs().max().item() for k in unequal), default=0.0)
     diagnosis = {}
-    if unequal:  # is each copy on the grid its stored scales define? (value / scale should be an integer)
+    if unequal:  # how many weights differ, and by how many grid steps
         from safetensors import safe_open
 
         key = unequal[0]
         module = key.rsplit(".", 1)[0]
-        folder = Path(f"{CHECKPOINT_DIR}/{name}")
-        with safe_open(next(folder.glob("*.safetensors")), "pt") as f:
+        with safe_open(next(Path(f"{CHECKPOINT_DIR}/{name}").glob("*.safetensors")), "pt") as f:
             scale = f.get_tensor(f"{module}.weight_scale").float()
-        group = ours[key].shape[1] // scale.shape[1]
-        grid = scale.repeat_interleave(group, dim=1)
-
-        def off_grid(w: torch.Tensor) -> float:
-            steps = w.float() / grid
-            return (steps - steps.round()).abs().max().item()
-
+        grid = scale.repeat_interleave(ours[key].shape[1] // scale.shape[1], dim=1)
         diff = ours[key].float() - library[key].float()
         diagnosis = {
             "tensor": key,
             "unequal_fraction": (diff != 0).float().mean().item(),
             "max_diff_in_steps": (diff.abs() / grid).max().item(),
-            "ours_off_grid": off_grid(ours[key]),
-            "library_off_grid": off_grid(library[key]),
         }
     metrics = {
         "model": model,
