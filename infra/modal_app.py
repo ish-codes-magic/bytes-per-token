@@ -391,6 +391,100 @@ def m4_gsm8k(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> 
     return to_plain([record])
 
 
+# Publishing needs a Hugging Face write token. The `publish` entrypoint attaches the Modal secret
+# `huggingface` (holding HF_TOKEN) at call time, so every other function runs without that secret existing.
+HF_SECRET = "huggingface"
+
+
+@app.function(cpu=1, memory=1024, timeout=5 * 60)
+def hf_owner() -> str:
+    """The Hugging Face account the token belongs to: the namespace the checkpoints are published under."""
+    import os
+
+    from huggingface_hub import HfApi
+
+    return HfApi(token=os.environ["HF_TOKEN"]).whoami()["name"]
+
+
+@app.function(cpu=2, memory=8192, timeout=60 * 60, volumes={CACHE: hf_cache})
+def hf_upload(folder: str, repo: str, card: str) -> dict:
+    """Upload one checkpoint folder and its model card, then check each file on the Hub against our copy.
+
+    A file counts as verified when the Hub's hash of it matches ours: SHA-256 for large (LFS) files, the git
+    blob hash for small ones. Only fully verified checkpoints may be deleted from the Volume.
+    """
+    import hashlib
+    import os
+
+    from huggingface_hub import HfApi
+
+    def sha256(data_or_path: bytes | Path) -> str:
+        if isinstance(data_or_path, bytes):
+            return hashlib.sha256(data_or_path).hexdigest()
+        digest = hashlib.sha256()
+        with open(data_or_path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 24), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def git_blob(data: bytes) -> str:
+        return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+    hf_cache.reload()
+    api = HfApi(token=os.environ["HF_TOKEN"])
+    api.create_repo(repo, repo_type="model", exist_ok=True)
+    commit = api.upload_folder(folder_path=folder, repo_id=repo, commit_message="Upload checkpoint")
+    api.upload_file(
+        path_or_fileobj=card.encode("utf-8"),
+        path_in_repo="README.md",
+        repo_id=repo,
+        commit_message="Add the model card",
+    )
+    local = {p.name: p for p in sorted(Path(folder).iterdir()) if p.is_file()}
+    remote = {info.path: info for info in api.get_paths_info(repo, [*local, "README.md"])}
+    files = []
+    for name, source in [*local.items(), ("README.md", card.encode("utf-8"))]:
+        data = source if isinstance(source, bytes) else None
+        size = len(data) if data is not None else source.stat().st_size
+        info = remote.get(name)
+        if info is None:
+            ok = False
+        elif getattr(info, "lfs", None):
+            ok = info.lfs.sha256 == sha256(source) and info.size == size
+        else:
+            ok = info.blob_id == git_blob(data if data is not None else source.read_bytes())
+        files.append({"path": name, "bytes": size, "verified": ok})
+    return {
+        "repo": repo,
+        "url": f"https://huggingface.co/{repo}",
+        "commit": commit.oid,
+        "files": files,
+        "verified": all(f["verified"] for f in files),
+    }
+
+
+@app.function(cpu=1, memory=1024, timeout=10 * 60, volumes={CACHE: hf_cache})
+def remove_checkpoints(names: list[str]) -> list[str]:
+    """Delete published checkpoints (and their dense exports) from the Volume; returns what was removed."""
+    import shutil
+
+    from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
+
+    hf_cache.reload()
+    removed = []
+    for name in names:
+        for path in (Path(CHECKPOINT_DIR, name), Path(CHECKPOINT_DIR, f"{name}.dense.safetensors")):
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+            else:
+                continue
+            removed.append(str(path))
+    hf_cache.commit()
+    return removed
+
+
 @app.function(cpu=2, memory=8192, timeout=20 * 60, volumes={CACHE: hf_cache})
 def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
     """Load a little of every calibration/evaluation source, so a missing dataset fails fast and cheaply."""
@@ -859,3 +953,49 @@ def m4(
             print(f"{what}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}")
         except Exception as err:
             print(f"{what} FAILED: {type(err).__name__}: {err}")
+
+
+@app.local_entrypoint()
+def publish(formats: str = "", models: str = "", delete_local: bool = False) -> None:
+    """Publish M4's checkpoints on the Hugging Face Hub with generated model cards (also kept in
+    results/model_cards/). With --delete-local, checkpoints whose every file verified are then removed from
+    the Volume: the Hub copy is the one that stays, and nanoserve reads it directly (quant/compressed.py).
+    """
+    from fastserve.report.m4 import FORMATS, LARGE, SMALL
+    from fastserve.report.model_card import model_card as card_for
+    from fastserve.report.model_card import repo_name
+    from fastserve.results import append_jsonl, git_info, make_record, new_run_id, read_jsonl
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; the cards cite a commit that doesn't hold them")
+    raw = REPO / "results" / "raw"
+    m4_records, m2_quality = read_jsonl(raw / "m4_production.jsonl"), read_jsonl(raw / "m2_quality.jsonl")
+    secret = [modal.Secret.from_name(HF_SECRET)]
+    owner = hf_owner.with_options(secrets=secret).remote()
+    uploader = hf_upload.with_options(secrets=secret)
+    cards = REPO / "results" / "model_cards"
+    cards.mkdir(parents=True, exist_ok=True)
+    calls = []
+    for model in models.split(",") if models else (SMALL, LARGE):
+        for fmt in formats.split(",") if formats else [f for f in FORMATS if f != "bf16"]:
+            repo = f"{owner}/{repo_name(model, fmt)}"
+            card = card_for(m4_records, m2_quality, model, fmt, commit=git["commit"], repo=repo)
+            (cards / f"{repo_name(model, fmt)}.md").write_text(card, encoding="utf-8", newline="\n")
+            folder = f"/cache/m4/{model.split('/')[-1]}-{fmt}"
+            calls.append((model, fmt, folder, uploader.spawn(folder, repo, card)))
+    run_id, published = new_run_id(), []
+    for model, fmt, folder, call in calls:
+        try:
+            result = call.get()
+        except Exception as err:
+            print(f"publish {model} {fmt} FAILED: {type(err).__name__}: {err}")
+            continue
+        record = make_record("m4_publish", {"model": model, "format": fmt, **result}, run_id=run_id, git=git)
+        append_jsonl(raw / "m4_production.jsonl", [record])
+        print(f"{result['url']}: {'verified' if result['verified'] else 'NOT verified'}")
+        if result["verified"]:
+            published.append(Path(folder).name)
+    if delete_local and published:
+        for path in remove_checkpoints.remote(published):
+            print(f"removed {path}")
