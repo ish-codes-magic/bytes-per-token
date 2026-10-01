@@ -610,3 +610,140 @@ def m4_records() -> list[dict[str, Any]]:
                     },
                 )
     return records
+
+
+M5_POLICIES = [
+    {"name": "bf16"},
+    {"name": "fp8", "keys": {"kind": "fp8"}, "values": {"kind": "fp8"}},
+    {"name": "int4-token", "keys": {"bits": 4}, "values": {"bits": 4}},
+    {"name": "int4-kivi", "keys": {"bits": 4, "axis": "channel", "group": 32}, "values": {"bits": 4}},
+    {"name": "streaming", "sinks": 4, "window": 1020},
+]
+
+
+@pytest.fixture
+def m5_policies() -> list[dict[str, Any]]:
+    return M5_POLICIES
+
+
+def _needle_cells(rule) -> list[dict[str, Any]]:
+    return [
+        {"length": n, "depth": d, "secret": "1", "passed": rule(n, d), "answer": "1"}
+        for n in (1024, 32000)
+        for d in (0.0, 1.0)
+    ]
+
+
+@pytest.fixture
+def m5_records() -> list[dict[str, Any]]:
+    """A hand-made M5 campaign with round numbers: FP8 KV doubles capacity, caching cuts TTFT 4×."""
+    env = {"gpu": "NVIDIA L4", "gpu_memory_bytes": 24 * 2**30}
+    records = []
+
+    def add(experiment, metrics):
+        record = make_record(
+            experiment, metrics, run_id="m5test", env=env, git={"commit": "0" * 16}, config={}
+        )
+        record["timestamp"] = "2026-10-01T00:00:00+00:00"
+        records.append(record)
+
+    columns = [
+        "t",
+        "running",
+        "waiting",
+        "kv_usage",
+        "prompt_tokens",
+        "generation_tokens",
+        "steps",
+        "preemptions",
+    ]
+    kv = {"bf16kv": 1.0, "bf16kv-flashinfer": 1.0, "fp8kv": 2.0, "fp8w-fp8kv": 2.0}  # capacity multiplier
+    speed = {"bf16kv": 1.0, "bf16kv-flashinfer": 1.1, "fp8kv": 1.5, "fp8w-fp8kv": 1.6}
+    for model, scale in (("Qwen/Qwen3-0.6B", 1.0), ("Qwen/Qwen3-1.7B", 2.0)):
+        for label in kv:
+            add(
+                "server_start",
+                {
+                    "label": label,
+                    "model": model,
+                    "kv_cache_tokens": int(170_000 * kv[label]),
+                    "kv_cache_memory_gib": 18.0,
+                    "max_concurrency": 4.0 * kv[label],
+                    "attention_backend": "FLASH_ATTN" if label == "bf16kv" else "FLASHINFER",
+                },
+            )
+            for workload, running, tok_s in (("saturation", 250, 2000), ("capacity", 40 * kv[label], 400)):
+                rate = tok_s * speed[label] / scale
+                rows = [[t, running, 10, 0.9, 1000 * t, rate * t, 20 * t, 0] for t in range(5)]
+                add(
+                    "serving",
+                    {
+                        "server": label,
+                        "model": model,
+                        "workload": workload,
+                        "load": {},
+                        "summary": {"output_throughput": rate},
+                        "server_timeline": {"columns": columns, "rows": rows},
+                    },
+                )
+            add(
+                "serving",
+                {
+                    "server": label,
+                    "model": model,
+                    "workload": "long_32k",
+                    "load": {},
+                    "summary": {"tpot_ms": {"p50": 20.0 / speed[label]}, "ttft_ms": {"p50": 3000.0}},
+                },
+            )
+        request_cols = ["id", "prompt_len", "output_tokens", "scheduled", "sent", "first_token", "finished"]
+        request_cols.append("cached_tokens")
+        for label, cached, ttft in (("prefix-off", 0, 0.2), ("prefix-on", 1600, 0.05)):
+            rows = [
+                [i, 2000, 64, 0.0, i * 1.0, i * 1.0 + ttft, i * 1.0 + 1.0, cached if i else 0]
+                for i in range(4)
+            ]
+            for workload in ("multi_turn", "shared_prefix"):
+                summary = {
+                    "output_throughput": 500.0 * (1.5 if cached else 1.0) / scale,
+                    "ttft_ms": {"p50": 1e3 * ttft},
+                    "tpot_ms": {"p50": 10.0},
+                }
+                add(
+                    "serving",
+                    {
+                        "server": label,
+                        "model": model,
+                        "workload": workload,
+                        "load": {},
+                        "summary": summary,
+                        "requests": {"columns": request_cols, "rows": rows},
+                    },
+                )
+        for policy, value in (("bf16", 0.0), ("fp8", 0.01), ("int4-token", 2.0), ("int4-kivi", 0.04)):
+            add(
+                "m5_kv_kl",
+                {"model": model, "policy": policy, "mean_kl": value * scale, "top1_agreement": 0.9},
+            )
+        add("m5_kv_kl", {"model": model, "policy": "streaming", "mean_kl": 0.05, "top1_agreement": 0.9})
+        add("m5_vllm_perplexity", {"model": model, "kv_cache_dtype": "fp8", "perplexity": 20.2})
+    for policy, rule in (("bf16", lambda n, d: True), ("streaming", lambda n, d: d == 1.0)):
+        cells = _needle_cells(rule)
+        rate = sum(c["passed"] for c in cells) / len(cells)
+        add("m5_kv_needle", {"model": "Qwen/Qwen3-0.6B", "policy": policy, "cells": cells, "pass_rate": rate})
+    cells = _needle_cells(lambda n, d: True)
+    add(
+        "m5_vllm_needle",
+        {"model": "Qwen/Qwen3-0.6B", "kv_cache_dtype": "fp8", "cells": cells, "pass_rate": 1.0},
+    )
+    keys = [[1.0] * 7 + [40.0] for _ in range(2)]  # 2 heads × 8 channels, one outlier key channel
+    add(
+        "m5_kv_stats",
+        {
+            "model": "Qwen/Qwen3-0.6B",
+            "key_ratio": [40.0, 8.0, 8.0],
+            "value_ratio": [2.0, 2.0, 2.0],
+            "profiles": {"14": {"keys": keys, "values": [[1.0] * 8 for _ in range(2)]}},
+        },
+    )
+    return records
