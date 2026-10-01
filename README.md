@@ -203,7 +203,7 @@ integer cache loses the needle while KIVI-style per-channel keys keep it:
 <!-- END GENERATED: caption-m5_needle -->
 
 What M5 found:
-- **Measure the kernel, not just the format.** Half of FP8 KV's gain on a busy server came from the attention
+- **Measure the kernel, not just the format.** Much of FP8 KV's gain on a busy server came from the attention
   kernel it switches to. A BF16 control on that kernel separated the two.
 - **KL can't see eviction.** StreamingLLM barely moved KL on 2k-token text and lost most needles at long
   context.

@@ -124,7 +124,7 @@
   so it saturates at vLLM's default scale. Per-token integer grids fail even at 8 bits (INT8 per token cost
   more KL than FP8). A per-channel-key control, added after that result and not predicted, confirmed the
   cause.
-- **The attention kernel was half the FP8-KV story.** FP8 KV forces FlashInfer on the L4. BF16 on FlashInfer
+- **The attention kernel was a large part of the FP8-KV story.** FP8 KV forces FlashInfer on the L4. BF16 on FlashInfer
   alone was much faster than on FlashAttention at saturation, and that revises M2's explanation of its 54%
   memory efficiency: the mixed prefill/decode steps run far closer to memory speed on FlashInfer. The
   saturated-step table shows it.
