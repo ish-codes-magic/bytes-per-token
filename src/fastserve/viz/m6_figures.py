@@ -41,6 +41,7 @@ METHOD_STYLE = {  # one color per method everywhere; draft length changes the li
     "eagle3": (OKABE_ITO["blue"], "D"),
 }
 K_STYLE = {1: ":", 3: "-", 5: "--", 6: "--"}
+SHORT = {"draft": "0.6B drafter", "draftawq": "INT4 drafter", "eagle3": "EAGLE-3", "ngram": "n-gram"}
 TASK_STYLE = {
     "chat": (OKABE_ITO["purple"], "o"),
     "code": (OKABE_ITO["blue"], "s"),
@@ -59,7 +60,7 @@ def _spec_labels(m6: Records) -> list[str]:
 
 
 def _draw_tokens(
-    ax: plt.Axes, pieces: list[str], flags: list[bool], width: int = 64, max_lines: int = 9
+    ax: plt.Axes, pieces: list[str], flags: list[bool], width: int = 104, max_lines: int = 9
 ) -> None:
     """Text as colored token boxes: monospace, wrapped at `width` characters."""
     ax.set(xlim=(0, width), ylim=(max_lines, 0))
@@ -244,8 +245,9 @@ def theory_vs_measured(m6: Records) -> tuple[plt.Figure, str]:
     caption = "Measured tokens per target pass against the independent-acceptance formula"
     if gap is not None:
         caption += (
-            f": at k = 8 the replay yields {gap:+.0%} versus the formula at the measured agreement, because "
-            "agreements come in runs"
+            f": at k = 8 the replay yields {gap:+.0%} versus the formula at the measured agreement. "
+            "Agreements aren't independent: every round starts right after a miss, where the drafter is "
+            "least reliable"
         )
     return fig, caption + "."
 
@@ -284,8 +286,12 @@ def speedup_vs_users(m6: Records) -> tuple[plt.Figure, str]:
         _, method, k = parse_label(best)
         caption = (
             f"The best method for one user ({server_label(method, k)}, {curves[best][1]:.2f}×) gives "
-            f"{curves[best][64]:.2f}× at 64 users: spare compute is what speculation spends, and a busy "
-            "server has none."
+            f"{curves[best][64]:.2f}× at 64 users"
+        )
+        below = [x for x in curves if curves[x].get(64, 1.0) < 1.0]
+        caption += (
+            f", and {len(below)} of the {len(curves)} setups fall below no speculation there: speculation "
+            "spends spare compute, and a busy server has little."
         )
     return fig, caption
 
@@ -315,8 +321,8 @@ def speedup_surface(m6: Records, method: str = "draft") -> tuple[plt.Figure, str
     best = np.unravel_index(np.nanargmax(grid), grid.shape)
     worst = np.unravel_index(np.nanargmin(grid), grid.shape)
     caption = (
-        f"With the Qwen3-0.6B drafter the best cell is k = {ks[best[0]]} at {users[best[1]]} user(s) "
-        f"({grid[best]:.2f}×) and the worst k = {ks[worst[0]]} at {users[worst[1]]} users "
+        f"With the Qwen3-0.6B drafter the best cell is k = {ks[best[0]]} with {users[best[1]]} concurrent "
+        f"({grid[best]:.2f}×) and the worst k = {ks[worst[0]]} with {users[worst[1]]} concurrent "
         f"({grid[worst]:.2f}×): "
         "longer drafts and busier servers both waste more verified tokens."
     )
@@ -342,9 +348,7 @@ def waterfall_v3(m6: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figur
             r = rate(label)
             if r:
                 _, method, k = parse_label(label)
-                bars.append(
-                    (server_label(method, k).replace(", k", "\nk").replace(" drafter", "\ndrafter"), cost(r))
-                )
+                bars.append((f"{SHORT[method]}\nk = {k}", cost(r)))
         for i, (_name, c) in enumerate(bars):
             if i == 0:
                 ax.bar(i, c, color=BASELINE_GRAY)
