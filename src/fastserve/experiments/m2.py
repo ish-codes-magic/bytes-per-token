@@ -108,6 +108,8 @@ def run_serving(
             )
             _warm_up(server, model)
             for name, loads in config["loads"].items():
+                if "workloads" in server_cfg and name not in server_cfg["workloads"]:
+                    continue  # this server runs only some of the config's workloads (M5)
                 specs = Workload.from_config(name, workloads[name]).requests()
                 for load in loads:
                     subset = specs[: load.get("requests", len(specs))]

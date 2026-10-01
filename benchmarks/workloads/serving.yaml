@@ -39,3 +39,18 @@ shared_prefix:           # an agent: a long shared system prompt + tools, then s
   input_len: {kind: lognormal, median: 64, sigma: 0.7, low: 8, high: 256}
   output_len: 64
   num_requests: 300
+
+capacity:                # many users with long prompts: the KV cache, not compute, caps how many run at once
+  input_len: 4096
+  output_len: 256
+  num_requests: 288
+
+multi_turn:              # chat apps: 4 system prompts, 32 conversations of 4 turns, each turn extends the last
+  shared_prefix_len: 1536
+  prefixes: 4
+  turns: 4
+  reply_len: 192         # stands in for the assistant's previous answer
+  input_len: {kind: lognormal, median: 96, sigma: 0.6, low: 16, high: 512}
+  output_len: 64
+  num_requests: 128
+  seed: 1                # seed 0 would reuse shared_prefix's prefix tokens: a false cross-workload cache hit
