@@ -22,6 +22,7 @@ from fastserve.hw.analysis import (  # noqa: E402
     metrics_of,
 )
 from fastserve.report import m4 as m4_report  # noqa: E402
+from fastserve.report import m5 as m5_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -77,6 +78,22 @@ def m4_blocks(m4: list, m2_quality: list, m3: list, configs: dict, bandwidth: fl
             m4, "Qwen/Qwen3-1.7B", "gptq", "right, then kept talking"
         ),
         "m4_gsm8k_looping": m4_report.gsm8k_example(m4, "Qwen/Qwen3-0.6B", "gptq", "looping"),
+    }
+
+
+def m5_blocks(m5: list, m4: list, m2_quality: list, configs: dict) -> dict[str, str]:
+    import yaml
+
+    predictions = json.loads((REPO / "benchmarks" / "predictions" / "m5.json").read_text(encoding="utf-8"))
+    config = yaml.safe_load((REPO / "benchmarks" / "configs" / "m5_kv.yaml").read_text(encoding="utf-8"))
+    bf16 = m5_report.start(m5, SMALL, "bf16kv") or {}
+    kv_bytes = bf16.get("kv_cache_memory_gib", 18.44) * 2**30
+    return {
+        "m5_predictions": prediction_table(predictions, m5_report.m5_observables(m5, m4)),
+        "m5_policies": m5_report.policy_table(m5, config["policies"], configs[SMALL], kv_bytes),
+        "m5_kv_serving": m5_report.kv_serving_table(m5),
+        "m5_prefix": m5_report.prefix_table(m5),
+        "m5_vllm_quality": m5_report.vllm_quality_table(m5, m2_quality, m4),
     }
 
 
@@ -203,6 +220,9 @@ def build_blocks() -> dict[str, str]:
         bandwidth = measured_bandwidth(latest_run(read_jsonl(probe)))
         records = read_jsonl(production), read_jsonl(quality), read_jsonl(quant)
         blocks.update(m4_blocks(*records, configs, bandwidth))
+        kv = REPO / "results" / "raw" / "m5_kv.jsonl"
+        if kv.exists():
+            blocks.update(m5_blocks(read_jsonl(kv), read_jsonl(production), read_jsonl(quality), configs))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
