@@ -46,14 +46,14 @@ model: Qwen/Qwen3-0.6B                           # nanoserve KL, like M3 (read b
 eval: {window: 2048, max_windows: 40}
 tasks:                                           # KL sections, one container each
   kl_small:
-    - {name: fp8, method: library, checkpoint: /cache/m4/Qwen3-0.6B-fp8.dense.safetensors, bits: 8, granularity: channel, format: fp8, act: token}
-    - {name: int8, method: library, checkpoint: /cache/m4/Qwen3-0.6B-int8.dense.safetensors, bits: 8, granularity: channel, format: int8, act: token}
-    - {name: gptq, method: library, checkpoint: /cache/m4/Qwen3-0.6B-gptq.dense.safetensors, bits: 4, full_range: true}
-    - {name: awq, method: library, checkpoint: /cache/m4/Qwen3-0.6B-awq.dense.safetensors, bits: 4, full_range: true}
+    - {name: fp8, method: library, compressed: /cache/m4/Qwen3-0.6B-fp8, bits: 8, granularity: channel, format: fp8, act: token}
+    - {name: int8, method: library, compressed: /cache/m4/Qwen3-0.6B-int8, bits: 8, granularity: channel, format: int8, act: token}
+    - {name: gptq, method: library, compressed: /cache/m4/Qwen3-0.6B-gptq, bits: 4, full_range: true}
+    - {name: awq, method: library, compressed: /cache/m4/Qwen3-0.6B-awq, bits: 4, full_range: true}
   kl_large:
     model: Qwen/Qwen3-1.7B
     entries:
-      - {name: fp8, method: library, checkpoint: /cache/m4/Qwen3-1.7B-fp8.dense.safetensors, bits: 8, granularity: channel, format: fp8, act: token}
-      - {name: int8, method: library, checkpoint: /cache/m4/Qwen3-1.7B-int8.dense.safetensors, bits: 8, granularity: channel, format: int8, act: token}
-      - {name: gptq, method: library, checkpoint: /cache/m4/Qwen3-1.7B-gptq.dense.safetensors, bits: 4, full_range: true}
-      - {name: awq, method: library, checkpoint: /cache/m4/Qwen3-1.7B-awq.dense.safetensors, bits: 4, full_range: true}
+      - {name: fp8, method: library, compressed: /cache/m4/Qwen3-1.7B-fp8, bits: 8, granularity: channel, format: fp8, act: token}
+      - {name: int8, method: library, compressed: /cache/m4/Qwen3-1.7B-int8, bits: 8, granularity: channel, format: int8, act: token}
+      - {name: gptq, method: library, compressed: /cache/m4/Qwen3-1.7B-gptq, bits: 4, full_range: true}
+      - {name: awq, method: library, compressed: /cache/m4/Qwen3-1.7B-awq, bits: 4, full_range: true}
