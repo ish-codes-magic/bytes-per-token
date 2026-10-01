@@ -50,6 +50,10 @@ TASK_STYLE = {
 }
 
 
+def _users(n: int) -> str:
+    return "1 user" if n == 1 else f"{n} users"
+
+
 def _spec_labels(m6: Records) -> list[str]:
     labels = {m["server"] for m in _newest(m6, "serving") if m["server"].startswith("bf16-")}
     labels = [x for x in labels if parse_label(x)[1] != "none"]
@@ -321,8 +325,8 @@ def speedup_surface(m6: Records, method: str = "draft") -> tuple[plt.Figure, str
     best = np.unravel_index(np.nanargmax(grid), grid.shape)
     worst = np.unravel_index(np.nanargmin(grid), grid.shape)
     caption = (
-        f"With the Qwen3-0.6B drafter the best cell is k = {ks[best[0]]} with {users[best[1]]} concurrent "
-        f"({grid[best]:.2f}×) and the worst k = {ks[worst[0]]} with {users[worst[1]]} concurrent "
+        f"With the Qwen3-0.6B drafter the best cell is k = {ks[best[0]]} for {_users(users[best[1]])} "
+        f"({grid[best]:.2f}×) and the worst k = {ks[worst[0]]} for {_users(users[worst[1]])} "
         f"({grid[worst]:.2f}×): "
         "longer drafts and busier servers both waste more verified tokens."
     )
