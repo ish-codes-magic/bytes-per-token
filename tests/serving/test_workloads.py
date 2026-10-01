@@ -3,7 +3,7 @@ import statistics
 
 import pytest
 
-from fastserve.serving.workloads import LengthDist, Workload, poisson_arrivals
+from fastserve.serving.workloads import LengthDist, Workload, poisson_arrivals, text_requests
 
 
 def test_length_distributions_respect_their_bounds():
@@ -61,3 +61,11 @@ def test_single_prefix_workloads_are_unchanged_by_the_conversation_fields():
     cfg = {"input_len": 20, "output_len": 5, "num_requests": 3, "shared_prefix_len": 10}
     plain = Workload.from_config("agent", cfg).requests()
     assert plain == Workload.from_config("agent", {**cfg, "prefixes": 1, "turns": 1}).requests()
+
+
+def test_text_requests_interleave_tasks_and_let_the_model_stop():
+    specs = text_requests({"chat": [[1], [2], [3]], "code": [[7, 7], [8, 8]]}, max_tokens=64)
+    assert [s.task for s in specs] == ["chat", "code", "chat", "code", "chat"]
+    assert [s.prompt for s in specs] == [[1], [7, 7], [2], [8, 8], [3]]
+    assert [s.id for s in specs] == list(range(5))
+    assert all(s.max_tokens == 64 and not s.ignore_eos for s in specs)

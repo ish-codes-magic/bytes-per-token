@@ -45,7 +45,11 @@ class LengthDist:
 class RequestSpec:
     id: int
     prompt: list[int]  # token ids
-    max_tokens: int  # output length (forced)
+    max_tokens: int  # output length: forced when ignore_eos, otherwise a cap
+    ignore_eos: bool = (
+        True  # random-token workloads force the length; real prompts stop where the model stops
+    )
+    task: str = ""  # for real prompts: which kind of request this is
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,25 @@ class Workload:
                     )
                 )
         return specs
+
+
+def text_requests(prompts: dict[str, list[list[int]]], max_tokens: int) -> list[RequestSpec]:
+    """Real prompts (token ids per task) as requests, interleaved task by task so any prefix of the list is
+    a balanced mix. Outputs end where the model ends them (or at `max_tokens`)."""
+    specs: list[RequestSpec] = []
+    for i in range(max(len(p) for p in prompts.values())):
+        for task, task_prompts in prompts.items():
+            if i < len(task_prompts):
+                specs.append(
+                    RequestSpec(
+                        id=len(specs),
+                        prompt=task_prompts[i],
+                        max_tokens=max_tokens,
+                        ignore_eos=False,
+                        task=task,
+                    )
+                )
+    return specs
 
 
 def poisson_arrivals(rate_per_s: float, n: int, seed: int = 0) -> list[float]:

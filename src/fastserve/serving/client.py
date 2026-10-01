@@ -30,7 +30,7 @@ async def send_request(session, base_url: str, model: str, spec: RequestSpec, t0
         "prompt": spec.prompt,  # token ids: no tokenizer in the loop
         "max_tokens": spec.max_tokens,
         "temperature": 0.0,
-        "ignore_eos": True,  # vLLM extension: always generate exactly max_tokens
+        "ignore_eos": spec.ignore_eos,  # vLLM extension: random-token workloads force exactly max_tokens
         "stream": True,
         "stream_options": {"include_usage": True, "continuous_usage_stats": True},
     }
