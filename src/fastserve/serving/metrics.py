@@ -31,6 +31,9 @@ class RequestResult:
     chunk_times: list[float] = field(default_factory=list)  # when each streamed chunk arrived
     chunk_tokens: list[int] = field(default_factory=list)  # how many tokens each chunk carried
     cached_tokens: int | None = None  # prompt tokens served from the prefix cache (if the server reports it)
+    output_crc: int | None = (
+        None  # CRC-32 of the generated text: equal outputs across servers have equal CRCs
+    )
     error: str | None = None
 
     @property
@@ -129,5 +132,6 @@ def request_rows(results: list[RequestResult]) -> dict[str, Any]:
         "first_token",
         "finished",
         "cached_tokens",
+        "output_crc",
     ]
     return {"columns": columns, "rows": [[getattr(r, c) for c in columns] for r in results if r.ok]}

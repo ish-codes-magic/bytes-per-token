@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import zlib
 from typing import Any
 
 from fastserve.serving.metrics import RequestResult
@@ -40,7 +41,7 @@ async def send_request(session, base_url: str, model: str, spec: RequestSpec, t0
             if response.status != 200:
                 result.error = f"HTTP {response.status}: {(await response.text())[:200]}"
                 return result
-            seen = 0
+            seen, checksum = 0, 0
             async for raw in response.content:  # server-sent events, one "data: {...}" line per chunk
                 line = raw.strip()
                 if not line.startswith(b"data:"):
@@ -49,7 +50,10 @@ async def send_request(session, base_url: str, model: str, spec: RequestSpec, t0
                 if data == b"[DONE]":
                     break
                 now = time.perf_counter() - t0
-                usage = json.loads(data).get("usage") or {}
+                chunk = json.loads(data)
+                for choice in chunk.get("choices") or []:  # a running checksum of the generated text
+                    checksum = zlib.crc32((choice.get("text") or "").encode("utf-8"), checksum)
+                usage = chunk.get("usage") or {}
                 cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
                 if cached is not None:  # only with --enable-prompt-tokens-details (M5's prefix caching)
                     result.cached_tokens = cached
@@ -62,6 +66,7 @@ async def send_request(session, base_url: str, model: str, spec: RequestSpec, t0
                 result.chunk_tokens.append(tokens - seen)
                 seen = tokens
             result.output_tokens = seen
+            result.output_crc = checksum
             result.finished = result.chunk_times[-1] if result.chunk_times else None
     except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as err:
         result.error = f"{type(err).__name__}: {err}"

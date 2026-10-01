@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import zlib
 
 import pytest
 
@@ -60,6 +61,7 @@ def test_every_token_is_timestamped(load):
         assert r.sent < r.first_token <= r.finished
         assert len(r.itls()) == spec.max_tokens - 1
         assert r.cached_tokens == len(spec.prompt) - 1
+        assert r.output_crc == zlib.crc32(b"x" * spec.max_tokens)  # the fake server streams "x" per token
 
 
 def test_http_errors_are_recorded_not_raised():
