@@ -1,0 +1,1 @@
+With the Qwen3-0.6B drafter the best cell is k = 3 for 1 user (1.24×) and the worst k = 5 for 64 users (0.69×): longer drafts and busier servers both waste more verified tokens.

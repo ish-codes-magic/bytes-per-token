@@ -1,0 +1,1 @@
+Waterfall v3: speculative decoding against BF16 on Qwen3-1.7B: for one user the best method changes cost by -41%; at 64 users every method lands between -17% and +45%.

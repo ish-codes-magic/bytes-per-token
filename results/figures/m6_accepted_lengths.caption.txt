@@ -1,0 +1,1 @@
+With 8 tokens drafted, a round of the small model accepts none on chat 33% of the time; n-gram lookup accepts none 95% of the time there, because it rarely has anything to propose.

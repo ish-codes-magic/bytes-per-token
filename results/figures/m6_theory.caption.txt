@@ -1,0 +1,1 @@
+Measured tokens per target pass against the independent-acceptance formula: at k = 8 the replay yields -7% versus the formula at the measured agreement. Agreements aren't independent: every round starts right after a miss, where the drafter is least reliable.
