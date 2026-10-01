@@ -1,6 +1,6 @@
 {
   "milestone": "M5",
-  "written_in_commit": "TBD",
+  "written_in_commit": "b93afc6",
   "note": "Written before any M5 measurement. Reasoning is in docs/learning/M5-kv-cache.md, section 4. Ratios are FP8-KV ÷ BF16-KV (or prefix caching on ÷ off) unless stated; for latencies, BF16 ÷ FP8 (higher = faster).",
   "predictions": [
     {"id": "kv_tokens_fp8_small", "label": "vLLM KV-cache tokens, FP8 KV / BF16 KV, Qwen3-0.6B (x)", "low": 1.9, "high": 2.02},
