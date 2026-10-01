@@ -81,7 +81,7 @@ def load_bench(model_name: str, cfg: dict[str, Any]) -> Bench:
     path = model_dir(model_name)
     tokenizer = AutoTokenizer.from_pretrained(path)
     windows = token_windows(wikitext_eval_ids(tokenizer), cfg["eval"]["window"], cfg["eval"]["max_windows"])
-    return Bench(model_name, load_pretrained(path), tokenizer, windows.cuda(), cfg["calibration"])
+    return Bench(model_name, load_pretrained(path), tokenizer, windows.cuda(), cfg.get("calibration", {}))
 
 
 # ---- one configuration --------------------------------------------------------------------------------
