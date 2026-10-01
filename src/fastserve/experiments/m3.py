@@ -127,13 +127,22 @@ def build(bench: Bench, entry: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     start = time.perf_counter()
     method, info = entry["method"], {}
     if method == "library":
-        from safetensors.torch import load_file
+        if entry.get(
+            "compressed"
+        ):  # a compressed-tensors checkpoint (a folder or a Hub repo), read by our reader
+            from fastserve.engine.loader import model_dir
+            from fastserve.quant.compressed import load_dense
 
-        path = entry["checkpoint"]  # a dense state dict: M3's by name, or any absolute path (M4's)
-        path = path if path.startswith("/") else f"{LIBRARY_DIR}/{path}.safetensors"
-        model = from_state_dict(
-            bench.config, load_file(path, device=str(bench.device)), device=bench.device, dtype=torch.bfloat16
-        )
+            source = entry["compressed"]
+            folder = source if source.startswith("/") else model_dir(source, download=True)
+            state = load_dense(folder, device=str(bench.device))
+        else:  # a dense state dict: M3's by name, or any absolute path
+            from safetensors.torch import load_file
+
+            path = entry["checkpoint"]
+            path = path if path.startswith("/") else f"{LIBRARY_DIR}/{path}.safetensors"
+            state = load_file(path, device=str(bench.device))
+        model = from_state_dict(bench.config, state, device=bench.device, dtype=torch.bfloat16)
         if entry.get("act"):  # a library W8A8 checkpoint: rounded weights, activations quantized on the fly
             w8a8_model(
                 model, W8A8Config(entry["format"], act_granularity=entry["act"]), quantize_weights=False

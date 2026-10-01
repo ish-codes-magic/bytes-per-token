@@ -119,3 +119,38 @@ def test_library_checkpoints_load_from_a_path_with_activation_quantization(bench
 
     model, _ = build(bench, {**entry, "act": "token", "format": "int8"})
     assert all(isinstance(m, QuantLinear) for m in decoder_linears(model).values())
+
+
+def test_library_entries_read_compressed_checkpoints(bench, tmp_path):
+    import json
+
+    import torch
+    from safetensors.torch import save_file
+
+    from fastserve.experiments.m3 import build
+    from fastserve.quant.compressed import pack_int
+    from fastserve.quant.model import decoder_linears
+
+    # an INT4 per-channel checkpoint of the tiny model, in compressed-tensors' pack-quantized layout
+    state, expected = {}, {}
+    linears = {f"{name}.weight" for name in decoder_linears(bench.ref)}
+    for key, w in bench.ref.state_dict().items():
+        if key not in linears:
+            state[key] = w.contiguous()
+            continue
+        scale = (w.float().abs().amax(dim=1, keepdim=True) / 7).to(torch.bfloat16)
+        q = (w.float() / scale.float()).round().clamp(-8, 7).to(torch.int8)
+        module = key.removesuffix(".weight")
+        state[f"{module}.weight_packed"] = pack_int(q, 4)
+        state[f"{module}.weight_scale"] = scale
+        state[f"{module}.weight_shape"] = torch.tensor(list(w.shape))
+        expected[key] = (q.float() * scale.float()).to(torch.bfloat16)
+    save_file(state, str(tmp_path / "model.safetensors"))
+    config = {"quantization_config": {"config_groups": {"group_0": {"weights": {"num_bits": 4}}}}}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    entry = {"name": "packed", "method": "library", "compressed": str(tmp_path), "bits": 4}
+    model, _ = build(bench, entry)
+    weights = model.state_dict()
+    assert all(torch.equal(weights[k].to(torch.bfloat16), v) for k, v in expected.items())
+    assert run_entry(bench, entry)["mean_kl"] > 0
