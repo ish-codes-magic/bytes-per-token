@@ -195,7 +195,8 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     streaming time, at batch ≈ 109. Corrected in the results section; the pre-registered prediction is left as
     written.
   - **Kernel fidelity:** vLLM's own perplexity (from prompt logprobs) matches nanoserve's simulation of the
-    same rounded weights within 1% for every format. The low-bit kernels compute what the checkpoints say.
+    same rounded weights within 1% for every format (AWQ worst, ~0.8%). The low-bit kernels compute what the
+    checkpoints say. *(Corrected below: the AWQ gap was the dense export, not the kernel.)*
   - Quantized formats get more non-KV memory reserved at startup, so the KV cache gains less than the weights
     free. Cause not found (the log only has totals). Open for M5.
 - **Surprise: GPTQ's GSM8K score is partly a stopping failure.** INT4 GSM8K dropped 29 / 22 points (0.6B / 1.7B),
@@ -209,3 +210,17 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **Spend:** September used $15.28 of Modal's $30 monthly credit (billing through 30 Sep 21:00 UTC). M4's
   checkpoints (64 GB containers) and ten servers cost the most. The later reruns, fidelity check and GSM8K
   logging aren't billed yet. None of the owner's $10 reserve is used.
+- **Gate M4 approved** (questions deferred). Tagged `v0.4-quant-production`. The owner approved publishing
+  the checkpoints and freeing the Modal Volume.
+- **Correction: the AWQ fidelity gap was llm-compressor's dense export, not vLLM.** Before deleting the
+  dense exports, I wrote our own reader for compressed-tensors checkpoints (`quant/compressed.py`; int4
+  unpacking checked against the library's `pack_to_int32` layout) and compared it against them. FP8 and
+  GPTQ match exactly. INT8 and AWQ differ in every linear: 0.16% / 0.6% of weights by one grid step. Those
+  are the two recipes that rescale weights first; the export re-rounds BF16 weights that sit near rounding
+  boundaries, while the checkpoint stores the original codes. vLLM serves the codes. Re-measuring M4's KL on
+  the codes moved the fidelity gaps to ≤0.2% for every format (AWQ 0.9% → 0.0% on 0.6B). AWQ KL moved
+  slightly (0.227 → 0.232 on 0.6B); conclusions unchanged.
+- **Dead end in that diagnosis:** I first measured how far each copy sat from the stored grid. Both were
+  equally off, because the BF16 product of code and scale rounds. Counting grid steps between the two copies
+  was the measure that worked.
+
