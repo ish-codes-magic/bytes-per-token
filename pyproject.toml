@@ -25,7 +25,11 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 # The only things installed on the laptop: `uv sync --only-group local`.
-local = ["modal>=1.0", "ruff>=0.6"]
+local = [
+    "modal>=1.0",
+    "pyyaml>=6.0",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["hatchling"]
