@@ -748,3 +748,121 @@ def m5_records() -> list[dict[str, Any]]:
         },
     )
     return records
+
+
+@pytest.fixture
+def m6_records() -> list[dict[str, Any]]:
+    """A hand-made M6 campaign: a drafter that is right 60% of the time, costly at k = 5 and at 64 users."""
+    from fastserve.spec.simulate import expected_tokens
+
+    records = []
+
+    def add(experiment, metrics):
+        record = make_record(
+            experiment, metrics, run_id="m6test", env={}, git={"commit": "0" * 16}, config={}
+        )
+        record["timestamp"] = "2026-10-01T00:00:00+00:00"
+        records.append(record)
+
+    tasks = ("chat", "code", "math", "summarize")
+    agree = {"chat": 0.5, "code": 0.7, "math": 0.6, "summarize": 0.6, "all": 0.6}
+    for target, factor in (("bf16", 1.0), ("fp8", 1.0), ("awq", 0.9)):
+        for drafter in ("small", "small-awq", "ngram") if target == "bf16" else ("small",):
+            for task, a in agree.items():
+                a = a * factor * (0.9 if drafter == "small-awq" else 1.0)
+                by_k = {
+                    str(k): {
+                        "tokens_per_round": 1.2 if drafter == "ngram" else expected_tokens(a, k),
+                        "acceptance_rate": a,
+                        "accepted_histogram": [40, 30, 20, 10][: k + 1],
+                    }
+                    for k in range(1, 9)
+                }
+                row = {
+                    "target": target,
+                    "drafter": drafter,
+                    "task": task,
+                    "prompts": 16,
+                    "tokens": 3000,
+                    "by_k": by_k,
+                }
+                if drafter != "ngram":
+                    row["rates"] = {"agree": a, "after_agree": a + 0.1, "after_miss": a - 0.1}
+                add("m6_agreement", row)
+    for drafter in ("small", "ngram"):
+        for task in tasks:
+            pieces = ["def", " f", "(", "x", "):", "\n", "    return", " x"]
+            flags = [True, True, False, True, True, False, drafter == "small", False]
+            shown = {"target": "bf16", "drafter": drafter, "task": task, "k": 4}
+            add("m6_highlight", {**shown, "pieces": pieces, "from_draft": flags})
+    for dtype, same in (("bfloat16", 6), ("float32", 8)):
+        add(
+            "m6_loop_check",
+            {
+                "target": "bf16",
+                "drafter": "small",
+                "dtype": dtype,
+                "prompts": 8,
+                "k": 4,
+                "identical_outputs": same,
+                "rounds_match_replay": same,
+                "first_divergence": [],
+                "tokens_per_round_actual": 2.5,
+                "tokens_per_round_replay": 2.5,
+            },
+        )
+    for task in tasks:
+        prefixes = [{"tokens": t, "tv_spec_vs_plain": 0.1 * t, "tv_plain_vs_plain": 0.1 * t} for t in (1, 2)]
+        stats = {
+            "samples": 1000,
+            "k": 3,
+            "chi_square": 50.0,
+            "chi_square_plain": 45.0,
+            "dof": 40,
+            "limit": 84.7,
+        }
+        add(
+            "m6_lossless", {"target": "bf16", "drafter": "small", "task": task, **stats, "prefixes": prefixes}
+        )
+    add(
+        "m6_step_times",
+        {"role": "target", "model": "t", "context": 600, "ms": {"1": 20.0, "4": 22.0, "9": 24.0}},
+    )
+    add("m6_step_times", {"role": "draft", "model": "d", "context": 600, "ms": {"1": 10.0}})
+
+    # vLLM: one user per task, then mixed tasks at 4, 16, 64 users. Speedups by (method, k) and users.
+    one_user = {
+        "none": 1.0,
+        "draft-k1": 1.1,
+        "draft-k3": 1.2,
+        "draft-k5": 0.9,
+        "ngram-k3": 1.05,
+        "eagle3-k3": 1.8,
+    }
+    busy = {4: 0.9, 16: 0.7, 64: 0.5}  # multiplies the one-user speedup of every speculative method
+    columns = ["t", "spec_drafts", "spec_draft_tokens", "spec_accepted"]
+    cols = ["id", "prompt_len", "output_tokens", "scheduled", "sent", "first_token", "finished", "output_crc"]
+    for target in ("bf16", "fp8", "awq"):
+        for method, gain in one_user.items():
+            if target != "bf16" and method not in ("none", "draft-k3"):
+                continue
+            label = f"{target}-{method}"
+            k = int(method[-1]) if method != "none" else 0
+            loads = [(f"spec_{t}", 1, 100.0 * gain) for t in tasks]
+            loads += [("spec_mixed", u, 100.0 * u * (gain * busy[u] if k else 1.0)) for u in busy]
+            for workload, users, rate in loads:
+                rows = [[i, 50, 100, 0.0, 0.0, 0.1, 1.0, 7 if (k and i == 0) else 1] for i in range(4)]
+                metrics = {
+                    "server": label,
+                    "model": "Qwen/Qwen3-1.7B",
+                    "workload": workload,
+                    "load": {"mode": "closed", "concurrency": users},
+                    "summary": {"output_throughput": rate},
+                    "requests": {"columns": cols, "rows": rows},
+                }
+                if k:  # 100 rounds of k draft tokens, 60% accepted
+                    timeline = {"columns": columns, "rows": [[0, 0, 0, 0], [1, 100, 100 * k, 60 * k]]}
+                    timeline["spec_accepted_per_position"] = [60.0] * k
+                    metrics["server_timeline"] = timeline
+                add("serving", metrics)
+    return records
