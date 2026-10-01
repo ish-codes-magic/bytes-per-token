@@ -10,7 +10,8 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 6 (speculative decoding). Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 6 (speculative decoding) is in gate review. Results appear below as
+> each milestone lands.
 
 ---
 
@@ -212,6 +213,56 @@ What M5 found:
 
 Details are in the [M5 learning doc](docs/learning/M5-kv-cache.md) and the [gate report](docs/gates/M5-report.md).
 
+### M6: speculative decoding
+
+A drafter guesses the next few tokens, and the target model checks them all in one pass. The sampler, drafters
+and draft-verify loop are written from scratch and **tested to be lossless**: speculative samples match the
+target's exact distribution on a toy model and on tiny Qwen3 models, and a deliberately broken sampler fails
+the same test. Which tokens a small model guesses for a larger one:
+
+![Tokens drafted and accepted, per task](results/figures/m6_highlight.png)
+
+<!-- BEGIN GENERATED: caption-m6_highlight -->
+*Blue tokens were drafted and accepted; bold orange ones the target wrote itself. Qwen3-0.6B drafted 75% of the code answer; N-gram lookup drafted 14% of the chat answer.*
+<!-- END GENERATED: caption-m6_highlight -->
+
+In vLLM, three kinds of drafter against Qwen3-1.7B, from one user to a busy server:
+
+![Speedup from speculation against concurrent users](results/figures/m6_speedup_vs_users.png)
+
+<!-- BEGIN GENERATED: caption-m6_speedup_vs_users -->
+*The best method for one user (EAGLE-3 head, k = 3, 1.70×) gives 1.21× at 64 users, and 6 of the 7 setups fall below no speculation there: speculation spends spare compute, and a busy server has little.*
+<!-- END GENERATED: caption-m6_speedup_vs_users -->
+
+![Cost per 1M tokens with each speculative method](results/figures/m6_waterfall.png)
+
+<!-- BEGIN GENERATED: caption-m6_waterfall -->
+*Waterfall v3: speculative decoding against BF16 on Qwen3-1.7B: for one user the best method changes cost by -41%; at 64 users every method lands between -17% and +45%.*
+<!-- END GENERATED: caption-m6_waterfall -->
+
+The real draft-verify loop against plain greedy decoding, on the real models:
+
+<!-- BEGIN GENERATED: m6_loop -->
+| Arithmetic | Prompts | Outputs identical to plain greedy | Rounds identical to the replay | Tokens per pass, real loop | Tokens per pass, replay |
+|---|---|---|---|---|---|
+| BF16 | 16 | 11 of 16 | 8 of 16 | 3.26 | 3.27 |
+| float32 (control) | 16 | 16 of 16 | 16 of 16 | 3.32 | 3.32 |
+<!-- END GENERATED: m6_loop -->
+
+What M6 found:
+- **Cheap guesses beat good guesses.** The EAGLE-3 head has the lowest acceptance rate and the highest
+  speedup, because a guess costs it a small fraction of a target step. A separate draft model guesses better
+  and gains little.
+- **Speculation spends idle compute, so it competes with everything else that does.** The gain shrinks as
+  users are added, and on a quantized (faster) target the same drafter costs throughput.
+- **A draft model halves the KV cache.** It keeps its own keys and values for every token.
+- **Speculation exposed BF16's rounding.** Outputs that are identical in float32 sometimes differ in BF16:
+  passes of different shapes round differently, and near-ties flip. The float32 control separates that from
+  the algorithm.
+
+Details are in the [M6 learning doc](docs/learning/M6-speculative-decoding.md) and the
+[gate report](docs/gates/M6-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -263,7 +314,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ✅ Done |
 | M4 | Quantization in production: format crossover vs batch size | ✅ Done |
 | M5 | KV-cache quantization and prefix caching | ✅ Done |
-| M6 | Speculative decoding, proven lossless | 🚧 In progress |
+| M6 | Speculative decoding, proven lossless | 🔍 Gate review |
 | M7 | Custom Triton kernels | ⏳ |
 | M8 | Full-stack ablation across model sizes, performance model | ⏳ |
 | M9 | Dashboard, write-up, one-command reproduction | ⏳ |
