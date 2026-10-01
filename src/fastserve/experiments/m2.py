@@ -67,12 +67,15 @@ async def _monitored(
 
 def _speculative_args(spec: dict[str, Any] | None) -> list[str]:
     """vLLM's --speculative-config for a server's `speculative` block (M6). A drafter given as a Hub id is
-    resolved to its local snapshot, downloading it once if needed."""
+    resolved to its local snapshot. The whole repo is fetched, not just the files nanoserve reads: drafter
+    heads such as EAGLE-3 ship their weights in other formats (e.g. pytorch_model.bin)."""
     if not spec:
         return []
     spec = dict(spec)
     if "model" in spec and not spec["model"].startswith("/"):
-        spec["model"] = model_dir(spec["model"], download=True)
+        from huggingface_hub import snapshot_download
+
+        spec["model"] = snapshot_download(spec["model"])
     return ["--speculative-config", json.dumps(spec)]
 
 
