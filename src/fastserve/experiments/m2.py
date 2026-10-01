@@ -15,8 +15,8 @@ from fastserve.results import environment_info, make_record, new_run_id
 from fastserve.serving.client import run_load
 from fastserve.serving.metrics import RequestResult, request_rows, summarize
 from fastserve.serving.server import VLLMServer
-from fastserve.serving.server_metrics import sample_server
-from fastserve.serving.workloads import RequestSpec, Workload
+from fastserve.serving.server_metrics import accepted_per_position, sample_server
+from fastserve.serving.workloads import RequestSpec, Workload, text_requests
 
 # What vLLM decides at startup and prints:
 # - how many tokens of KV cache fit, and how much memory the weights and the KV cache take
@@ -52,10 +52,29 @@ async def _monitored(
 
     stop = asyncio.Event()
     async with aiohttp.ClientSession() as session:
+        before = await accepted_per_position(session, url)
         sampler = asyncio.create_task(sample_server(session, url, stop))
         results = await run_load(url, model, specs, load, seed)
         stop.set()
-        return results, await sampler
+        timeline = await sampler
+        after = await accepted_per_position(session, url)
+        if after:  # speculative decoding: draft tokens accepted at each position during this load
+            before = before or [0.0] * len(after)
+            timeline["spec_accepted_per_position"] = [b - a for a, b in zip(before, after, strict=True)]
+        return results, timeline
+
+
+def _requests(name: str, cfg: dict[str, Any], model_path: str) -> list[RequestSpec]:
+    """A workload's requests: seeded random tokens, or (with `tasks`) real prompts through the tokenizer."""
+    if "tasks" not in cfg:
+        return Workload.from_config(name, cfg).requests()
+    from transformers import AutoTokenizer
+
+    from fastserve.quality.prompts import task_prompts
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    prompts = {task: task_prompts(tokenizer, task, cfg["prompts_per_task"]) for task in cfg["tasks"]}
+    return text_requests(prompts, cfg["output_len"])
 
 
 def _warm_up(server: VLLMServer, model: str) -> None:
@@ -110,7 +129,7 @@ def run_serving(
             for name, loads in config["loads"].items():
                 if "workloads" in server_cfg and name not in server_cfg["workloads"]:
                     continue  # this server runs only some of the config's workloads (M5)
-                specs = Workload.from_config(name, workloads[name]).requests()
+                specs = _requests(name, workloads[name], path)
                 for load in loads:
                     subset = specs[: load.get("requests", len(specs))]
                     results, timeline = asyncio.run(_monitored(server.url, model, subset, load, seed))
@@ -127,6 +146,9 @@ def run_serving(
                             "server": label,
                             "model": model,
                             "workload": name,
+                            "tasks": workloads[name].get(
+                                "tasks"
+                            ),  # real-prompt workloads: request i is task i mod n
                             "load": load,
                             "summary": summary,
                             "requests": request_rows(results),
