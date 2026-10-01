@@ -21,6 +21,7 @@ async def _fake_completions(request):
         chunk = {"choices": [{"text": "x"}], "usage": {**usage, "completion_tokens": i}}
         await response.write(f"data: {json.dumps(chunk)}\n\n".encode())
     final = {"choices": [], "usage": {**usage, "completion_tokens": body["max_tokens"]}}  # usage-only chunk
+    final["usage"]["prompt_tokens_details"] = {"cached_tokens": len(body["prompt"]) - 1}  # a prefix-cache hit
     await response.write(f"data: {json.dumps(final)}\n\ndata: [DONE]\n\n".encode())
     return response
 
@@ -58,6 +59,7 @@ def test_every_token_is_timestamped(load):
         assert r.ok and r.output_tokens == spec.max_tokens == sum(r.chunk_tokens)
         assert r.sent < r.first_token <= r.finished
         assert len(r.itls()) == spec.max_tokens - 1
+        assert r.cached_tokens == len(spec.prompt) - 1
 
 
 def test_http_errors_are_recorded_not_raised():

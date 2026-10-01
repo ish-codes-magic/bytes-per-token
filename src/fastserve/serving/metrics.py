@@ -30,6 +30,7 @@ class RequestResult:
     output_tokens: int = 0
     chunk_times: list[float] = field(default_factory=list)  # when each streamed chunk arrived
     chunk_tokens: list[int] = field(default_factory=list)  # how many tokens each chunk carried
+    cached_tokens: int | None = None  # prompt tokens served from the prefix cache (if the server reports it)
     error: str | None = None
 
     @property
@@ -119,5 +120,14 @@ def summarize(
 
 def request_rows(results: list[RequestResult]) -> dict[str, Any]:
     """Compact per-request timing table for CDFs and swimlane plots (a columnar dict keeps files small)."""
-    columns = ["id", "prompt_len", "output_tokens", "scheduled", "sent", "first_token", "finished"]
+    columns = [
+        "id",
+        "prompt_len",
+        "output_tokens",
+        "scheduled",
+        "sent",
+        "first_token",
+        "finished",
+        "cached_tokens",
+    ]
     return {"columns": columns, "rows": [[getattr(r, c) for c in columns] for r in results if r.ok]}

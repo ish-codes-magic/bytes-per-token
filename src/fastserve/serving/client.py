@@ -49,7 +49,11 @@ async def send_request(session, base_url: str, model: str, spec: RequestSpec, t0
                 if data == b"[DONE]":
                     break
                 now = time.perf_counter() - t0
-                tokens = (json.loads(data).get("usage") or {}).get("completion_tokens")
+                usage = json.loads(data).get("usage") or {}
+                cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                if cached is not None:  # only with --enable-prompt-tokens-details (M5's prefix caching)
+                    result.cached_tokens = cached
+                tokens = usage.get("completion_tokens")
                 if tokens is None or tokens <= seen:
                     continue  # e.g. the final usage-only chunk
                 if result.first_token is None:
