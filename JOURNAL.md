@@ -303,3 +303,40 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   at tokens 3, 31 and 38. Hypothesis: a k+1-token pass and a 1-token pass round differently in BF16, which
   flips near-ties. Added a float32 control to test that, instead of assuming it.
 
+## 2026-10-02
+
+- **M6 results (nanoserve for agreement and losslessness; vLLM 0.30.0 on the L4 for speed):**
+  - 17 of 28 predictions in range. The misses: the drafter is better than I guessed; BF16 isn't exact; costs
+    inside vLLM's speculative loop differ from standalone; a busy server hurts less than my worst case.
+  - **Agreement:** Qwen3-0.6B predicts 83% of Qwen3-1.7B's greedy tokens (code 95%, math 90%, chat and
+    summarization 72%). The replay's 2.99 tokens per pass at k = 3 matches vLLM's counters (3.0).
+  - **Not independent:** agreement is 85% after an agreement and 72% after a miss. Rounds start after a miss,
+    so tokens per pass sit ~3–7% *below* E(α, k). (My first caption said "because of runs", the wrong way
+    round. Fixed.)
+  - **One user:** draft model 1.21× / 1.24× / 1.20× at k = 1 / 3 / 5; EAGLE-3 head 1.70× with only 38% of
+    its tokens accepted; n-gram 1.7× on code and 0.86–0.91× on chat.
+  - **Why EAGLE wins:** a drafted token costs it 1.2 ms (c = 0.08) against 6.3 ms (c = 0.43) for the small
+    model. Cheap guesses beat good guesses.
+  - **Busy server:** at 64 users the draft model gives 0.69–0.88×, n-gram 0.92–0.97×, EAGLE still 1.21×.
+  - **Hidden cost:** a draft model cuts the KV cache from 152,800 to ~64,000 tokens (its own weights and
+    its own KV for every token). EAGLE and n-gram cost ~10%.
+  - **Interaction:** the drafter's agreement barely moves with a quantized target (83.1% → 83.1% FP8, 82.0%
+    INT4), but the speedup goes 1.24× → 0.79× (FP8) → 0.50× (INT4): the target's step shrinks, the drafter's
+    doesn't. Speculation and quantization spend the same slack.
+- **Open: the INT4 drafter is slower than the BF16 drafter inside vLLM's speculative loop** (7.4 ms vs 6.3 ms
+  per drafted token; standalone 3.4 ms vs 5.8 ms). vLLM did select Marlin for it. Cause not found. A
+  candidate for M7's profiling.
+- **Surprise that became a finding: BF16 logits depend on the shape of the pass.**
+  - Greedy: the real loop matched plain decoding on 11 of 16 prompts in BF16 and 16 of 16 in float32. vLLM's
+    outputs with a drafter were byte-identical to no speculation for only 44% of requests.
+  - Sampling: the first run showed plain sampling *failing* the chi-square test against "its own" exact
+    distribution (339 vs a limit of 12) on the chat prompt. Impossible for a correct sampler, so I checked
+    the reference instead of the sampler. The reference pass (one sequence, no cache), the plain sampler's
+    pass (a batch of 50 through a cache) and the verifier's pass (4 new tokens on a cached prompt) put the
+    first token's distribution up to 0.23 apart in total variation in BF16, and 10⁻⁵ apart in float32.
+  - Each sampler passes against the distribution its own pass computes, in both dtypes.
+  - Lesson: when a "can't happen" result appears, question the yardstick first. And "lossless" has to be
+    stated against a specific computation, because BF16 doesn't have one true distribution.
+- **A borderline result checked, not waved through:** float32 speculative sampling scored χ² = 11.8 at a
+  limit of 12 with 600 samples. With 3,000 samples it scored 2.6. A bias would have grown fivefold.
+
