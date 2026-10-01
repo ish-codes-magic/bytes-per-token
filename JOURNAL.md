@@ -249,4 +249,26 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     0.0014, 13× less. The cause is the outlier channels, not the bit width.
   - INT4 per-token keys are catastrophic (KL 6.0, top-1 10%); rotating the keys helps (1.0) but isn't
     enough when one channel holds most of the vector's energy; KIVI's per-channel keys reach 0.032.
+- **Correction:** the |452| above is KV head 0's peak. Over all heads, layer 0's largest key on Qwen3-0.6B is
+  |506|. Qwen3-1.7B's peaks at |394|, inside FP8's range.
+- **M5 results (vLLM 0.30.0, L4; nanoserve for the KV policies):**
+  - 24 of 31 predictions in range. Capacity, 32k latency, needle recall and prefix caching behaved as modeled.
+  - **The kernel confound was real and large.** BF16 KV on FlashInfer is 1.45× (0.6B) / 1.24× (1.7B) faster
+    than on FlashAttention at saturation, with the same ~250 sequences and a full cache. FP8 KV's 2.19× is
+    that kernel switch × FP8 storage (1.52×). Without the control I would have credited FP8 with all of it.
+  - **That revises M2's conclusion.** M2 blamed the gap to the memory-bound ceiling (54%) on chunked-prefill
+    tokens in every step. The same mixed steps run at 79% of memory speed on FlashInfer. A large part of the
+    gap is FlashAttention's handling of mixed batches on Ada, not the mixing itself. Why: M7's profiler.
+  - FP8 KV: KV tokens exactly 2× on the same kernel (FlashInfer reserves more memory than FlashAttention,
+    hence 1.83× vs FlashAttention on 1.7B). Capacity workload: 39 → 70 running, 1.77× throughput. 32k decode
+    1.47× faster; TTFT unchanged. Needle 100%, perplexity +1.2% (0.6B) and −2% (1.7B, the "perplexity
+    rewards damage" trap again; KL 0.012).
+  - FP8 weights on top of FP8 KV make the saturated 0.6B server 12% slower (W8A8's activation pass, as in M4)
+    but help 1.7B by 8%.
+  - Prefix caching: vLLM cached 85.3% of multi-turn prompt tokens against the radix tree's 85.5% ceiling.
+    TTFT 222 → 60 ms; throughput 1.68× (above range) because shorter prefill chunks also shorten everyone
+    else's decode steps (TPOT 18 → 12 ms).
+  - StreamingLLM's KL (0.038) was *below* the predicted range while its needle score was 32%: WikiText barely
+    uses context beyond 1,000 tokens. KL alone would have called eviction safe.
+- **Cost:** M5's campaign ran ~22 containers in parallel. Billing will show it under October's credit.
 
