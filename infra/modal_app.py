@@ -518,6 +518,28 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     from importlib.metadata import version
     from pathlib import Path
 
+    if topic == "kv":  # M5: KV-cache dtypes and scales, prefix-cache metrics, per-request cached tokens
+        import re
+
+        import vllm
+
+        lines = [f"vllm {version('vllm')}"]
+        patterns = [
+            r"CacheDType\s*=",
+            r"calculate_kv_scales",
+            r"prefix_cache_(hits|queries)",
+            r"enable_prompt_tokens_details",
+            r"Maximum concurrency for",
+            r"cached_tokens",
+            r"fp8.*kv cache|kv cache.*fp8",
+        ]
+        root = Path(vllm.__file__).parent
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for pattern in patterns:
+                for match in list(re.finditer(rf"^.*({pattern}).*$", text, re.M | re.I))[:3]:
+                    lines.append(f"{path.relative_to(root)}: {match.group(0).strip()[:160]}")
+        return "\n".join(lines[:400])
     if topic == "w8a8":  # the kernels vLLM's startup log named for FP8 and INT8 W8A8
         import vllm
 
