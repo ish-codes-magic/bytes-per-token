@@ -316,7 +316,9 @@ def speedup_surface(m6: Records, method: str = "draft") -> tuple[plt.Figure, str
     for i in range(len(ks)):
         for j in range(len(users)):
             if not np.isnan(grid[i, j]):
-                ax.text(j, i, f"{grid[i, j]:.2f}×", ha="center", va="center", fontsize=9)
+                dark = abs(grid[i, j] - 1) > 0.7 * span  # the colormap's ends are dark: switch to white text
+                color = "white" if dark else "black"
+                ax.text(j, i, f"{grid[i, j]:.2f}×", ha="center", va="center", fontsize=9, color=color)
     ax.set_xticks(range(len(users)), [str(u) for u in users])
     ax.set_yticks(range(len(ks)), [str(k) for k in ks])
     ax.set(xlabel="concurrent users", ylabel="draft length k")
