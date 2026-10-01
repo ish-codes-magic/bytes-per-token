@@ -14,6 +14,7 @@ policies:                                         # how the cache stores K and V
   - {name: bf16}
   - {name: fp8, keys: {kind: fp8}, values: {kind: fp8}}                       # vLLM's default: scale 1.0
   - {name: int8, keys: {bits: 8}, values: {bits: 8}}                          # per token, asymmetric
+  - {name: int8-kivi, keys: {bits: 8, axis: channel, group: 32}, values: {bits: 8}}  # control, added after kl_small
   - {name: int4-token, keys: {bits: 4}, values: {bits: 4}}                    # naive: keys per token too
   - {name: int4-token-rot, keys: {bits: 4}, values: {bits: 4}, rotate_keys: true}   # QuaRot-style keys
   - {name: int4-kivi, keys: {bits: 4, axis: channel, group: 32}, values: {bits: 4}}  # KIVI: keys per channel
@@ -22,7 +23,7 @@ policies:                                         # how the cache stores K and V
 tasks:                                            # one container each
   kl_small: {kind: kl, model: Qwen/Qwen3-0.6B}
   kl_large: {kind: kl, model: Qwen/Qwen3-1.7B}
-  needle_a: {kind: needle, model: Qwen/Qwen3-0.6B, policies: [bf16, fp8, int8, int4-token]}
+  needle_a: {kind: needle, model: Qwen/Qwen3-0.6B, policies: [bf16, fp8, int8, int8-kivi, int4-token]}
   needle_b: {kind: needle, model: Qwen/Qwen3-0.6B, policies: [int4-token-rot, int4-kivi, int2-kivi, streaming]}
   stats_small: {kind: stats, model: Qwen/Qwen3-0.6B, windows: 8, layers: [0, 14, 27]}
   stats_large: {kind: stats, model: Qwen/Qwen3-1.7B, windows: 8, layers: [0, 14, 27]}
