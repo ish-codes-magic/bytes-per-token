@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 import urllib.request
@@ -20,6 +21,7 @@ class VLLMServer:
         *,
         served_name: str,
         extra_args: list[str] | None = None,
+        env: dict[str, str] | None = None,
         port: int = 8000,
         log_path: str | Path = "/tmp/vllm.log",
         startup_timeout_s: float = 900,
@@ -35,6 +37,7 @@ class VLLMServer:
             str(port),
             *(extra_args or []),
         ]
+        self.env = env or {}  # extra environment variables, e.g. VLLM_ATTENTION_BACKEND
         self.log_path, self.startup_timeout_s = Path(log_path), startup_timeout_s
         self.process: subprocess.Popen | None = None
         self.startup_s: float | None = None
@@ -45,7 +48,9 @@ class VLLMServer:
             raise RuntimeError("server already started")
         start = time.perf_counter()
         self._log = self.log_path.open("w")
-        self.process = subprocess.Popen(self.command, stdout=self._log, stderr=subprocess.STDOUT)
+        self.process = subprocess.Popen(
+            self.command, stdout=self._log, stderr=subprocess.STDOUT, env={**os.environ, **self.env}
+        )
         while time.perf_counter() - start < self.startup_timeout_s:
             if self.process.poll() is not None:
                 self._log.close()
