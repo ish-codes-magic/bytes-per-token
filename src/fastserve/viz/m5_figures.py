@@ -338,7 +338,7 @@ def waterfall_v2(m5: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figur
         if (SMALL, title) in kernel:
             note += f"; the FlashInfer kernel alone {kernel[SMALL, title]:+.0%}"
         parts.append(f"{title} {change:+.0%} ({note})")
-    caption = "Waterfall v2, Qwen3-0.6B, the cheapest setup against BF16: " + ", ".join(parts) + "."
+    caption = "Waterfall v2, Qwen3-0.6B, the cheapest setup against BF16: " + "; ".join(parts) + "."
     return fig, caption
 
 
