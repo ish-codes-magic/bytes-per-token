@@ -241,8 +241,8 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   and each prefix-caching server runs one load per workload, so no load replays requests into a warm cache.
 - **Surprise: Qwen3's keys have huge fixed outlier channels.** In layer 0, KV head 0, key channel 50 reaches
   |452|, with a median channel max of 5.8. That's just past FP8 E4M3's largest value (448), so at vLLM's
-  default scale of 1.0 that channel saturates. QK-norm doesn't prevent outliers; its learned per-channel
-  weight creates them.
+  default scale of 1.0 that channel saturates. QK-norm normalizes each key head's RMS, yet a few channels
+  still dominate; whether its learned per-channel weight or RoPE puts them there is not yet checked.
   - Consequence: per-token INT8 KV cost KL 0.019, *more* than FP8's 0.015 (predicted 0.0002–0.003). One
     channel at 452 stretches each token's grid to steps of ~2 for channels near 5.
   - **Control added after seeing this (not a prediction):** INT8 with per-channel keys (KIVI-style) costs KL
