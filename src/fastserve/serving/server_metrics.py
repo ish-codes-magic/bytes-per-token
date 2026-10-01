@@ -23,6 +23,8 @@ SERIES = {
     "generation_tokens": "vllm:generation_tokens_total",
     "steps": "vllm:iteration_tokens_total_count",  # a histogram of tokens per engine step: its count = steps
     "preemptions": "vllm:num_preemptions_total",
+    "prefix_queries": "vllm:prefix_cache_queries_total",  # prompt tokens looked up in the prefix cache
+    "prefix_hits": "vllm:prefix_cache_hits_total",  # ... and how many of them were found there
 }
 
 

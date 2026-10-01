@@ -18,6 +18,8 @@ vllm:generation_tokens_created{engine="0",model_name="Qwen/Qwen3-0.6B"} 1.7e+09
 vllm:iteration_tokens_total_bucket{engine="0",le="1.0",model_name="Qwen/Qwen3-0.6B"} 4.0
 vllm:iteration_tokens_total_count{engine="0",model_name="Qwen/Qwen3-0.6B"} 90.0
 vllm:iteration_tokens_total_sum{engine="0",model_name="Qwen/Qwen3-0.6B"} 2100.0
+vllm:prefix_cache_queries_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 4096.0
+vllm:prefix_cache_hits_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 3072.0
 vllm:request_success_total{engine="0",finished_reason="length",model_name="Qwen/Qwen3-0.6B"} 7.0
 vllm:request_success_total{engine="0",finished_reason="stop",model_name="Qwen/Qwen3-0.6B"} 2.0
 process_open_fds 42 1700000000000
