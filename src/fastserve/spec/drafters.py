@@ -62,3 +62,12 @@ class NGramDrafter:
                 if context[start : start + n] == suffix:
                     return context[start + n : start + n + k], None
         return [], None
+
+
+class NoDrafter:
+    """Proposes nothing: every round is one target token. Plain decoding, as the k = 0 case of the loop."""
+
+    def propose(
+        self, context: list[int], k: int, generator: torch.Generator | None = None
+    ) -> tuple[list[int], torch.Tensor | None]:
+        return [], None
