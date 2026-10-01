@@ -29,7 +29,13 @@ def needle_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]:
 
     from fastserve.quality.needle import grid, passed
 
-    llm = LLM(model=model_path, max_model_len=cfg["max_model_len"], gpu_memory_utilization=0.85, seed=0)
+    llm = LLM(
+        model=model_path,
+        max_model_len=cfg["max_model_len"],
+        gpu_memory_utilization=0.85,
+        seed=0,
+        kv_cache_dtype=cfg.get("kv_cache_dtype", "auto"),  # M5: "fp8" stores the KV cache in FP8 E4M3
+    )
     cases = grid(llm.get_tokenizer(), cfg["lengths"], cfg["depths"], cfg["secrets"])
     outputs = llm.generate([c.prompt for c in cases], SamplingParams(temperature=0.0, max_tokens=24))
     cells = [
@@ -71,7 +77,13 @@ def vllm_perplexity_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     windows = token_windows(wikitext_eval_ids(tokenizer), cfg["window"], cfg["max_windows"])
-    llm = LLM(model=model_path, max_model_len=cfg["window"] + 16, gpu_memory_utilization=0.85, seed=0)
+    llm = LLM(
+        model=model_path,
+        max_model_len=cfg["window"] + 16,
+        gpu_memory_utilization=0.85,
+        seed=0,
+        kv_cache_dtype=cfg.get("kv_cache_dtype", "auto"),
+    )
     outputs = llm.generate(
         [{"prompt_token_ids": w.tolist()} for w in windows], SamplingParams(max_tokens=1, prompt_logprobs=0)
     )
