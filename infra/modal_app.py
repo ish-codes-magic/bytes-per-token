@@ -326,6 +326,39 @@ def m4_fidelity(fmt: str, model: str, config_path: str, run_id: str, git: dict) 
     return to_plain([record])
 
 
+@app.function(cpu=4, memory=16384, timeout=30 * 60, volumes={CACHE: hf_cache})
+def m4_decompress_check(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """Our compressed-tensors reader against llm-compressor's own dense export of the same checkpoint."""
+    import torch
+    from safetensors.torch import load_file
+
+    from fastserve.experiments.m4_checkpoints import CHECKPOINT_DIR
+    from fastserve.quant.compressed import load_dense
+    from fastserve.results import environment_info, make_record, to_plain
+
+    hf_cache.reload()
+    name = f"{model.split('/')[-1]}-{fmt}"
+    ours = load_dense(f"{CHECKPOINT_DIR}/{name}")
+    library = load_file(f"{CHECKPOINT_DIR}/{name}.dense.safetensors")
+    shared = sorted(set(ours) & set(library))
+    unequal = [k for k in shared if not torch.equal(ours[k], library[k].to(ours[k].dtype))]
+    max_diff = max(((ours[k].float() - library[k].float()).abs().max().item() for k in unequal), default=0.0)
+    metrics = {
+        "model": model,
+        "format": fmt,
+        "tensors": len(shared),
+        "only_ours": sorted(set(ours) - set(library)),
+        "only_library": sorted(set(library) - set(ours)),
+        "unequal_tensors": unequal,
+        "max_abs_diff": max_diff,
+    }
+    meta = {"path": config_path}
+    record = make_record(
+        "m4_decompress_check", metrics, run_id=run_id, config=meta, git=git, env=environment_info()
+    )
+    return to_plain([record])
+
+
 @app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
 def m4_gsm8k(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """GSM8K for one format with every answer logged, sorted into failure buckets."""
@@ -405,7 +438,7 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     return "\n".join(lines)
 
 
-@app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60)
+@app.function(image=quant_image, cpu=2, memory=8192, timeout=15 * 60, volumes={CACHE: hf_cache})
 def quant_library_facts(topic: str = "m3") -> str:
     """What the installed llm-compressor does, read before relying on it (AGENTS.md §2.3).
 
@@ -419,6 +452,37 @@ def quant_library_facts(topic: str = "m3") -> str:
     from compressed_tensors.quantization.utils import helpers
 
     lines = [f"llmcompressor {version('llmcompressor')}, compressed-tensors {version('compressed-tensors')}"]
+    if topic == "compressed":  # the on-disk format of M4's checkpoints, to decompress them ourselves
+        import json
+
+        from safetensors import safe_open
+
+        hf_cache.reload()
+        for name in ("Qwen3-0.6B-fp8", "Qwen3-0.6B-int8", "Qwen3-0.6B-gptq"):
+            folder = Path(CACHE, "m4", name)
+            lines.append(f"== {name}: {sorted(p.name for p in folder.iterdir())}")
+            config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+            lines.append(json.dumps(config.get("quantization_config"), indent=1)[:2500])
+            for shard in sorted(folder.glob("*.safetensors")):
+                with safe_open(shard, "pt") as f:
+                    for key in sorted(f.keys()):
+                        if (
+                            "layers.0.mlp.down_proj" in key
+                            or "layers.0.self_attn.q_proj" in key
+                            or "embed" in key
+                        ):
+                            t = f.get_slice(key)
+                            lines.append(f"  {key}: {t.get_dtype()} {t.get_shape()}")
+        import compressed_tensors
+
+        for path in sorted(Path(compressed_tensors.__file__).parent.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for name in ("def pack_to_int32", "def unpack_from_int32"):
+                at = text.find(name)
+                if at >= 0:
+                    lines.append(f"{path}:")
+                    lines.append(text[at : at + 2500])
+        return "\n".join(lines)
     if topic == "m4":
         for preset in ("FP8_DYNAMIC", "W8A8", "W4A16"):
             lines.append(f"{preset}: {preset_name_to_scheme(preset, ['Linear'])}")
@@ -741,6 +805,9 @@ def m4(
             calls.append((f"fidelity {model} {fmt}", m4_fidelity.spawn(fmt, model, config, run_id, git)))
         if "gsm8k" in wanted:
             calls.append((f"gsm8k {model} {fmt}", m4_gsm8k.spawn(fmt, model, config, run_id, git)))
+        if "decompress" in wanted:  # needs the dense exports, so not a default step
+            check = m4_decompress_check.spawn(fmt, model, config, run_id, git)
+            calls.append((f"decompress {model} {fmt}", check))
 
     for model in [] if formats_given else models:  # BF16 needs no checkpoint
         if "serving" in wanted:
