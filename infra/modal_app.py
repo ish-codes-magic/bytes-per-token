@@ -251,6 +251,40 @@ def m3_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     return to_plain(run_task(task, config, run_id=run_id, git=git, config_path=config_path))
 
 
+@app.function(gpu=GPU, cpu=4, memory=32768, timeout=120 * 60, volumes={CACHE: hf_cache})
+def m5_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """One section of the M5 config's nanoserve tasks (KV policy KL, needle, statistics) on one L4."""
+    import yaml
+
+    hf_cache.reload()
+
+    from fastserve.experiments.m5 import run_task
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    return to_plain(run_task(task, config, run_id=run_id, git=git, config_path=config_path))
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m5_vllm_quality(kind: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """vLLM with an FP8 KV cache: the needle grid ("needle") or WikiText-2 perplexity ("perplexity")."""
+    import yaml
+
+    from fastserve.engine.loader import model_dir
+    from fastserve.experiments.m2_quality import needle_task, vllm_perplexity_task
+    from fastserve.results import environment_info, make_record, to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))["vllm_quality"]
+    cfg = {**config[kind], "kv_cache_dtype": config["kv_cache_dtype"]}
+    task = needle_task if kind == "needle" else vllm_perplexity_task
+    metrics = {"model": model, "kv_cache_dtype": cfg["kv_cache_dtype"], **task(model_dir(model), cfg)}
+    meta = {"path": config_path, kind: cfg}
+    record = make_record(
+        f"m5_vllm_{kind}", metrics, run_id=run_id, config=meta, git=git, env=environment_info()
+    )
+    return to_plain([record])
+
+
 @app.function(image=quant_image, gpu=GPU, cpu=4, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
 def m3_library(entry: dict, calibration: dict, config_path: str, run_id: str, git: dict) -> list[dict]:
     """llm-compressor quantizes the model; the dense result goes to the Volume, for nanoserve to score."""
@@ -1024,3 +1058,45 @@ def publish(formats: str = "", models: str = "", delete_local: bool = False) -> 
     if delete_local and published:
         for path in remove_checkpoints.remote(published):
             print(f"removed {path}")
+
+
+@app.local_entrypoint()
+def m5(
+    config: str = "benchmarks/configs/m5_kv.yaml", steps: str = "tasks,serving,quality", only: str = ""
+) -> None:
+    """M5: nanoserve's KV-policy tasks, vLLM's servers, and vLLM's FP8-KV quality, all in parallel containers.
+
+    `--only` (comma-separated) picks task names and server names, e.g. `--only kl_small,0.6b-fp8kv`.
+    """
+    from fastserve.results import append_jsonl, git_info, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    cfg = load_config.remote(config)
+    wanted, picked = set(steps.split(",")), set(only.split(",")) if only else None
+    run_id, out = new_run_id(), REPO / "results" / "raw" / "m5_kv.jsonl"
+    calls: list[tuple[str, object]] = []
+    if "tasks" in wanted:
+        for task in cfg["tasks"]:
+            if picked is None or task in picked:
+                calls.append((task, m5_task.spawn(task, config, run_id, git)))
+    if "serving" in wanted:
+        for server in cfg["servers"]:
+            if picked is None or server["name"] in picked:
+                calls.append((f"serving {server['name']}", m2_run.spawn(config, git, [server["name"]])))
+    if "quality" in wanted:
+        for model in cfg["vllm_quality"]["models"]:
+            for kind in ("needle", "perplexity"):
+                if picked is None or f"vllm-{kind}" in picked:
+                    calls.append(
+                        (f"vllm {kind} {model}", m5_vllm_quality.spawn(kind, model, config, run_id, git))
+                    )
+    for what, call in calls:
+        try:
+            print(
+                f"{what}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}",
+                flush=True,
+            )
+        except Exception as err:  # keep what the other containers produced
+            print(f"{what} FAILED: {type(err).__name__}: {err}", flush=True)

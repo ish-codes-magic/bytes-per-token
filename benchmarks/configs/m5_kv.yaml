@@ -1,0 +1,81 @@
+# M5: KV-cache engineering. Run: uv run --only-group local modal run infra/modal_app.py::m5
+# Reference side (nanoserve, BF16 weights): what each KV policy does to quality. Production side (vLLM): what
+# FP8 KV and prefix caching do to speed, capacity and cost.
+
+# ---- reference: nanoserve (read by experiments/m5.run_task) ----------------------------------------------
+eval: {window: 2048, max_windows: 40}             # M2's WikiText-2 windows
+needle:                                           # M2's grid, through nanoserve's chunked prefill
+  lengths: [1024, 4096, 8192, 16384, 32000]
+  depths: [0.0, 0.25, 0.5, 0.75, 1.0]
+  secrets: ["4729", "8136", "2051"]
+  chunk: 512                                      # a multiple of every per-channel key group
+  max_new_tokens: 24
+policies:                                         # how the cache stores K and V (absent = BF16)
+  - {name: bf16}
+  - {name: fp8, keys: {kind: fp8}, values: {kind: fp8}}                       # vLLM's default: scale 1.0
+  - {name: int8, keys: {bits: 8}, values: {bits: 8}}                          # per token, asymmetric
+  - {name: int4-token, keys: {bits: 4}, values: {bits: 4}}                    # naive: keys per token too
+  - {name: int4-token-rot, keys: {bits: 4}, values: {bits: 4}, rotate_keys: true}   # QuaRot-style keys
+  - {name: int4-kivi, keys: {bits: 4, axis: channel, group: 32}, values: {bits: 4}}  # KIVI: keys per channel
+  - {name: int2-kivi, keys: {bits: 2, axis: channel, group: 32}, values: {bits: 2, group: 32}}
+  - {name: streaming, sinks: 4, window: 1020}                                 # StreamingLLM: keeps 1,024
+tasks:                                            # one container each
+  kl_small: {kind: kl, model: Qwen/Qwen3-0.6B}
+  kl_large: {kind: kl, model: Qwen/Qwen3-1.7B}
+  needle_a: {kind: needle, model: Qwen/Qwen3-0.6B, policies: [bf16, fp8, int8, int4-token]}
+  needle_b: {kind: needle, model: Qwen/Qwen3-0.6B, policies: [int4-token-rot, int4-kivi, int2-kivi, streaming]}
+  stats_small: {kind: stats, model: Qwen/Qwen3-0.6B, windows: 8, layers: [0, 14, 27]}
+  stats_large: {kind: stats, model: Qwen/Qwen3-1.7B, windows: 8, layers: [0, 14, 27]}
+
+# ---- production: vLLM (read by experiments/m2.run_serving) ---------------------------------------------
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80
+slo: {ttft_ms: 500, tpot_ms: 50}
+seed: 0
+servers:
+  # FP8 KV on the L4 runs FlashInfer's attention (FlashAttention's FP8 path needs FA3 on Hopper), so a BF16
+  # cache on FlashInfer separates "fewer KV bytes" from "a different kernel".
+  - {name: 0.6b-bf16kv, label: bf16kv, model: Qwen/Qwen3-0.6B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching]}
+  - {name: 0.6b-bf16kv-fi, label: bf16kv-flashinfer, model: Qwen/Qwen3-0.6B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching, --attention-backend, FLASHINFER]}
+  - {name: 0.6b-fp8kv, label: fp8kv, model: Qwen/Qwen3-0.6B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
+  - {name: 0.6b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-fp8,
+     workloads: [saturation, capacity, long_32k], args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
+  - {name: 1.7b-bf16kv, label: bf16kv, model: Qwen/Qwen3-1.7B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching]}
+  - {name: 1.7b-bf16kv-fi, label: bf16kv-flashinfer, model: Qwen/Qwen3-1.7B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching, --attention-backend, FLASHINFER]}
+  - {name: 1.7b-fp8kv, label: fp8kv, model: Qwen/Qwen3-1.7B, workloads: [saturation, capacity, long_32k],
+     args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
+  - {name: 1.7b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+     workloads: [saturation, capacity, long_32k], args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
+  # Prefix caching: one load per workload, so no load replays requests into a cache that already holds them
+  - {name: 0.6b-prefix-off, label: prefix-off, model: Qwen/Qwen3-0.6B, workloads: [multi_turn, shared_prefix],
+     args: [--no-enable-prefix-caching, --enable-prompt-tokens-details]}
+  - {name: 0.6b-prefix-on, label: prefix-on, model: Qwen/Qwen3-0.6B, workloads: [multi_turn, shared_prefix],
+     args: [--enable-prefix-caching, --enable-prompt-tokens-details]}
+  - {name: 1.7b-prefix-off, label: prefix-off, model: Qwen/Qwen3-1.7B, workloads: [multi_turn, shared_prefix],
+     args: [--no-enable-prefix-caching, --enable-prompt-tokens-details]}
+  - {name: 1.7b-prefix-on, label: prefix-on, model: Qwen/Qwen3-1.7B, workloads: [multi_turn, shared_prefix],
+     args: [--enable-prefix-caching, --enable-prompt-tokens-details]}
+loads:
+  saturation:                                     # as in M2/M4: the engine held full
+    - {mode: closed, concurrency: 512}
+  capacity:                                       # 96 users with 4k-token prompts: more than a BF16 cache holds
+    - {mode: closed, concurrency: 96}
+  long_32k:                                       # one user, 32k tokens: decode reads ~3.6 GB of BF16 KV per step
+    - {mode: closed, concurrency: 1}
+  multi_turn:
+    - {mode: closed, concurrency: 8}
+  shared_prefix:
+    - {mode: closed, concurrency: 8}
+
+# ---- production quality: vLLM with an FP8 KV cache (BF16 baselines: M2's needle, M4's perplexity) -------
+vllm_quality:
+  models: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B]
+  kv_cache_dtype: fp8
+  needle: {max_model_len: 34000, lengths: [1024, 4096, 8192, 16384, 32000], depths: [0.0, 0.25, 0.5, 0.75, 1.0],
+           secrets: ["4729", "8136", "2051"]}
+  perplexity: {window: 2048, max_windows: 40}
