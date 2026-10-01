@@ -10,8 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 5 (KV-cache engineering) is in gate review. Results appear below as
-> each milestone lands.
+> **Status:** 🚧 In progress: Milestone 6 (speculative decoding). Results appear below as each milestone lands.
 
 ---
 
@@ -263,8 +262,8 @@ Two sizes from one family show **how each gain changes with model size**.
 | M2 | Baselines: vLLM benchmarks + quality harness | ✅ Done |
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ✅ Done |
 | M4 | Quantization in production: format crossover vs batch size | ✅ Done |
-| M5 | KV-cache quantization and prefix caching | 🔍 Gate review |
-| M6 | Speculative decoding, proven lossless | ⏳ |
+| M5 | KV-cache quantization and prefix caching | ✅ Done |
+| M6 | Speculative decoding, proven lossless | 🚧 In progress |
 | M7 | Custom Triton kernels | ⏳ |
 | M8 | Full-stack ablation across model sizes, performance model | ⏳ |
 | M9 | Dashboard, write-up, one-command reproduction | ⏳ |
