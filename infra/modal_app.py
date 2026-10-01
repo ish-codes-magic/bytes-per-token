@@ -537,6 +537,17 @@ def check_text_sources(model: str = DEFAULT_MODEL) -> dict:
             found[name] = f"{tuple(ids.shape)}: {tokenizer.decode(ids[0, :24])!r}"
         except Exception as err:  # report every source, even after one fails
             found[name] = f"{type(err).__name__}: {err}"
+    from fastserve.quality.prompts import TASKS, task_prompts
+
+    for task in TASKS:  # M6's real prompts
+        try:
+            prompts = task_prompts(tokenizer, task, 8)
+            lengths = [len(p) for p in prompts]
+            found[f"prompts/{task}"] = (
+                f"{min(lengths)}–{max(lengths)} tokens: {tokenizer.decode(prompts[0][-40:])!r}"
+            )
+        except Exception as err:
+            found[f"prompts/{task}"] = f"{type(err).__name__}: {err}"
     hf_cache.commit()  # keep the downloaded shards for the real runs
     return found
 
