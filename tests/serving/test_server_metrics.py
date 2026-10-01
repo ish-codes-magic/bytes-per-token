@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from fastserve.serving.server_metrics import SERIES, parse_prometheus
+from fastserve.serving.server_metrics import SERIES, SPEC_PER_POSITION, labeled, parse_prometheus
 
 # Shaped like vLLM's export: HELP/TYPE comments, labels, a histogram's _bucket/_count/_sum samples.
 EXPORT = """\
@@ -20,6 +20,12 @@ vllm:iteration_tokens_total_count{engine="0",model_name="Qwen/Qwen3-0.6B"} 90.0
 vllm:iteration_tokens_total_sum{engine="0",model_name="Qwen/Qwen3-0.6B"} 2100.0
 vllm:prefix_cache_queries_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 4096.0
 vllm:prefix_cache_hits_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 3072.0
+vllm:spec_decode_num_drafts_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 100.0
+vllm:spec_decode_num_draft_tokens_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 300.0
+vllm:spec_decode_num_accepted_tokens_total{engine="0",model_name="Qwen/Qwen3-0.6B"} 180.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="Qwen/Qwen3-0.6B",position="0"} 90.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="Qwen/Qwen3-0.6B",position="1"} 60.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="Qwen/Qwen3-0.6B",position="2"} 30.0
 vllm:request_success_total{engine="0",finished_reason="length",model_name="Qwen/Qwen3-0.6B"} 7.0
 vllm:request_success_total{engine="0",finished_reason="stop",model_name="Qwen/Qwen3-0.6B"} 2.0
 process_open_fds 42 1700000000000
@@ -34,6 +40,12 @@ def test_parse_reads_values_and_sums_label_sets():
     assert values["vllm:request_success_total"] == 9  # two finish reasons, summed
     assert values["process_open_fds"] == 42  # a trailing timestamp is not the value
     assert not any(name.startswith("#") for name in values)
+
+
+def test_labeled_reads_one_label_per_sample():
+    assert labeled(EXPORT, SPEC_PER_POSITION, "position") == {"0": 90.0, "1": 60.0, "2": 30.0}
+    assert labeled(EXPORT, "vllm:num_requests_running", "position") == {}
+    assert parse_prometheus(EXPORT)[SPEC_PER_POSITION] == 180  # summed over positions = accepted tokens
 
 
 def test_every_series_is_in_the_sample_export_except_what_it_omits():
