@@ -1,6 +1,6 @@
 {
   "milestone": "M6",
-  "written_in_commit": "TBD",
+  "written_in_commit": "995a42e",
   "note": "Written before any M6 measurement. Reasoning is in docs/learning/M6-speculative-decoding.md, section 4. Speedups are speculative tokens/s ÷ the same target without speculation, in vLLM, greedy decoding. 'Drafter' is Qwen3-0.6B (BF16) for target Qwen3-1.7B unless stated.",
   "predictions": [
     {"id": "agree_all", "label": "Per-token agreement, drafter vs target, all tasks (nanoserve)", "low": 0.55, "high": 0.8},
