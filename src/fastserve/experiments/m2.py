@@ -7,6 +7,7 @@ timeline of the server's own metrics (running and waiting requests, KV-cache use
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 
@@ -64,6 +65,17 @@ async def _monitored(
         return results, timeline
 
 
+def _speculative_args(spec: dict[str, Any] | None) -> list[str]:
+    """vLLM's --speculative-config for a server's `speculative` block (M6). A drafter given as a Hub id is
+    resolved to its local snapshot, downloading it once if needed."""
+    if not spec:
+        return []
+    spec = dict(spec)
+    if "model" in spec and not spec["model"].startswith("/"):
+        spec["model"] = model_dir(spec["model"], download=True)
+    return ["--speculative-config", json.dumps(spec)]
+
+
 def _requests(name: str, cfg: dict[str, Any], model_path: str) -> list[RequestSpec]:
     """A workload's requests: seeded random tokens, or (with `tasks`) real prompts through the tokenizer."""
     if "tasks" not in cfg:
@@ -113,6 +125,7 @@ def run_serving(
         model, label, args = server_cfg["model"], server_cfg["label"], server_cfg.get("args", [])
         path = server_cfg.get("path") or model_dir(model)
         env = server_cfg.get("env")
+        args = [*args, *_speculative_args(server_cfg.get("speculative"))]
         with VLLMServer(path, served_name=model, extra_args=args, env=env) as server:
             add(
                 "server_start",
@@ -121,6 +134,7 @@ def run_serving(
                     "model": model,
                     "args": args,
                     "env": env,
+                    "speculative": server_cfg.get("speculative"),
                     "startup_s": server.startup_s,
                     **_from_log(server),
                 },
