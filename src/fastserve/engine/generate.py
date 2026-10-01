@@ -67,6 +67,45 @@ def generate(
         next_positions += 1
 
 
+@torch.inference_mode()
+def generate_long(
+    model: CausalLM,
+    prompt: list[int],
+    params: SamplingParams,
+    *,
+    chunk: int = 512,
+    generator: torch.Generator | None = None,
+) -> list[int]:
+    """One long prompt: prefill it `chunk` tokens at a time through a real cache, then decode.
+
+    Chunking bounds the prefill's activation memory (a 32k-token prompt in one pass needs [32k × 32k]
+    attention scores per head in the reference attention). The cache makes the result identical to one pass.
+    """
+    weight = model.lm_head.weight
+    device = weight.device
+    cache = ContiguousKVCache(
+        model.config,
+        max_batch=1,
+        max_len=len(prompt) + params.max_new_tokens,
+        dtype=weight.dtype,
+        device=device,
+    )
+    ids = torch.tensor(prompt, device=device)[None]  # [1, P]
+    for start in range(0, len(prompt), chunk):
+        piece = ids[:, start : start + chunk]
+        positions = torch.arange(start, start + piece.shape[1], device=device)[None]
+        logits = model(piece, positions, cache, select=torch.tensor([piece.shape[1] - 1], device=device))
+    output: list[int] = []
+    zero = torch.zeros(1, dtype=torch.long, device=device)
+    while True:
+        token = sample(logits, params, generator)  # [1]
+        output.append(int(token))
+        if _is_done(output, params):
+            return output
+        position = torch.tensor([[len(prompt) + len(output) - 1]], device=device)
+        logits = model(token[:, None], position, cache, select=zero)
+
+
 @dataclass
 class Request:
     id: Any

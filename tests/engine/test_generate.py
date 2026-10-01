@@ -47,3 +47,12 @@ def test_continuous_batcher_rejects_a_request_that_can_never_fit(tiny_model):
     batcher.submit(Request(id=0, prompt=[1, 2, 3], params=GREEDY))  # needs 5 blocks worst case
     with pytest.raises(ValueError, match="never fit"):
         batcher.run()
+
+
+def test_chunked_long_prefill_generates_the_same_tokens(tiny_model):
+    from fastserve.engine.generate import generate, generate_long
+    from fastserve.engine.sampler import SamplingParams
+
+    prompt = torch.randint(0, 256, (45,), generator=torch.Generator().manual_seed(3)).tolist()
+    params = SamplingParams(max_new_tokens=10)
+    assert generate_long(tiny_model, prompt, params, chunk=8) == generate(tiny_model, [prompt], params)[0]
