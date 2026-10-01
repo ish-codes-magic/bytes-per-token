@@ -84,5 +84,7 @@ def test_lossless_measurement_passes_for_a_correct_sampler(pair):
     target, draft = pair
     out = lossless(target, draft, prompts(1)[0], samples=300, tokens=2, k=2, plain_batch=100)
     assert out["chi_square"] < out["limit"] and out["chi_square_plain"] < out["limit"]
+    assert out["chi_square_own"] < out["limit"] and out["chi_square_plain_own"] < out["limit"]
+    assert max(out["path_tv"].values()) < 1e-4  # float32 on CPU: the three passes agree
     assert [p["tokens"] for p in out["prefixes"]] == [1, 2]
     assert all(0 <= p["tv_spec_vs_plain"] <= 1 for p in out["prefixes"])

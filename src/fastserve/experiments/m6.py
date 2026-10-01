@@ -167,6 +167,41 @@ def loop_check(
     }
 
 
+@torch.inference_mode()
+def first_token_paths(
+    target: CausalLM, prompt: list[int], k: int, plain_batch: int
+) -> dict[str, torch.Tensor]:
+    """The first generated token's distribution, as three differently shaped passes compute it. [vocab] each.
+
+    Mathematically they are one distribution. Numerically each pass rounds differently, and in BF16 (whose
+    values near 20 are 0.125 apart) that can move real probability when two tokens are nearly tied.
+    - "reference": the prompt alone, one sequence, no cache.
+    - "plain": what plain sampling uses: a batch of identical prompts prefilled through a cache.
+    - "speculative": what the verifier uses: the last prompt token plus k drafted tokens, on a cached prompt.
+    """
+    weight = target.lm_head.weight
+    device, n = weight.device, len(prompt)
+    ids = torch.tensor([prompt], device=device)
+
+    def distribution(logits: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(logits.float(), dim=-1).cpu()
+
+    cache = ContiguousKVCache(
+        target.config, max_batch=plain_batch, max_len=n + 1, dtype=weight.dtype, device=device
+    )
+    positions = torch.arange(n, device=device).expand(plain_batch, -1)
+    last = torch.full((plain_batch,), n - 1, device=device)
+    batched = target(ids.expand(plain_batch, -1), positions, cache, select=last)[0]
+    lm = CachedLM(target, n + k + 2)
+    lm.logits_after(prompt + [0] * k, k + 1)  # the first sample's pass caches the prompt
+    verifier = lm.logits_after(prompt + [1] * k, k + 1)[0]  # every later sample's pass looks like this one
+    return {
+        "reference": distribution(target(ids)[0, -1]),
+        "plain": distribution(batched),
+        "speculative": distribution(verifier),
+    }
+
+
 def lossless(
     target: CausalLM,
     draft: CausalLM,
@@ -179,8 +214,9 @@ def lossless(
 ) -> dict[str, Any]:
     """Sampling at temperature 1: do speculative samples follow the target's distribution?
 
-    - First token: chi-square against the target's exact softmax (a plain sample gets the same test, as a
-      reference for what a correct sampler scores).
+    - First token, chi-square against an exact distribution: each sampler against the distribution its own
+      pass computed ("own"), and against the single-sequence reference pass. A correct sampler passes the
+      first. It passes the second only if the passes agree numerically, which `path_tv` measures directly.
     - Longer prefixes: total variation between speculative and plain samples of the first t tokens, next to
       the distance between two independent plain samples (the noise floor at this sample size).
     """
@@ -200,11 +236,10 @@ def lossless(
         runs = [generate(target, [prompt] * plain_batch, params, generator=on_device) for _ in range(batches)]
         plain.append([o for run in runs for o in run][:samples])
 
-    with torch.inference_mode():
-        first = torch.softmax(target(torch.tensor([prompt], device=device))[0, -1].float(), dim=-1).cpu()
-    exact = {i: p for i, p in enumerate(first.tolist()) if p > 0}
-    statistic, dof = chi_square(Counter(o[0] for o in spec), exact)
-    control, _ = chi_square(Counter(o[0] for o in plain[0]), exact)
+    paths = first_token_paths(target, prompt, k, plain_batch)
+    exact = {name: {i: p for i, p in enumerate(dist.tolist()) if p > 0} for name, dist in paths.items()}
+    first = {"speculative": Counter(o[0] for o in spec), "plain": Counter(o[0] for o in plain[0])}
+    statistic, dof = chi_square(first["speculative"], exact["reference"])
     positions = []
     for t in range(tokens):
         counts = [Counter(tuple(o[: t + 1]) for o in group) for group in (spec, plain[0], plain[1])]
@@ -218,10 +253,18 @@ def lossless(
     return {
         "samples": samples,
         "k": k,
-        "chi_square": statistic,
-        "chi_square_plain": control,
+        "chi_square": statistic,  # against the reference pass
+        "chi_square_plain": chi_square(first["plain"], exact["reference"])[0],
+        "chi_square_own": chi_square(first["speculative"], exact["speculative"])[0],  # against its own pass
+        "chi_square_plain_own": chi_square(first["plain"], exact["plain"])[0],
         "dof": dof,
         "limit": chi_square_limit(dof),
+        "path_tv": {  # how far apart the passes' first-token distributions are: no sampling involved
+            "plain_vs_reference": 0.5 * (paths["plain"] - paths["reference"]).abs().sum().item(),
+            "speculative_vs_reference": 0.5 * (paths["speculative"] - paths["reference"]).abs().sum().item(),
+            "speculative_vs_plain": 0.5 * (paths["speculative"] - paths["plain"]).abs().sum().item(),
+        },
+        "top_probability": paths["reference"].max().item(),
         "prefixes": positions,
     }
 
@@ -309,13 +352,23 @@ def run_task(
                 records.append(record("m6_loop_check", {**names, **check}))
         elif spec["kind"] == "lossless":
             records = []
-            for t in ref["tasks"]:
-                metrics = lossless(target, draft, prompts[t][0], spec["samples"], spec["tokens"], spec["k"])
-                records.append(
-                    record(
-                        "m6_lossless", {"target": target_name, "drafter": spec["draft"], "task": t, **metrics}
+            for dtype in spec.get("dtypes", ["bfloat16"]):  # float32: the control for BF16's rounding
+                target.to(getattr(torch, dtype))
+                draft.to(getattr(torch, dtype))
+                batch = spec["plain_batch"][dtype]
+                for t in ref["tasks"]:
+                    metrics = lossless(
+                        target,
+                        draft,
+                        prompts[t][0],
+                        spec["samples"],
+                        spec["tokens"],
+                        spec["k"],
+                        plain_batch=batch,
                     )
-                )
+                    names = {"target": target_name, "drafter": spec["draft"], "task": t, "dtype": dtype}
+                    records.append(record("m6_lossless", {**names, **metrics}))
+                    print(f"lossless {dtype} {t}: {metrics['path_tv']}", flush=True)
         elif spec["kind"] == "timing":
             context = max(prompts["summarize"], key=len)
             sizes = [1, *(k + 1 for k in ref["ks"])]

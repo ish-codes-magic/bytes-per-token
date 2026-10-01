@@ -23,7 +23,8 @@ tasks:                                            # one container each
               target: {name: fp8, compressed: /cache/m4/Qwen3-1.7B-fp8, format: fp8, act: token}}
   agree_awq: {kind: agreement, drafts: [small], target: {name: awq, compressed: /cache/m4/Qwen3-1.7B-awq}}
   loop: {kind: loop, draft: small, k: 4, prompts_per_task: 4, max_new_tokens: 96, dtypes: [bfloat16, float32]}
-  lossless: {kind: lossless, draft: small, k: 3, samples: 1000, tokens: 4}
+  lossless: {kind: lossless, draft: small, k: 3, samples: 600, tokens: 3, dtypes: [bfloat16, float32],
+             plain_batch: {bfloat16: 50, float32: 20}}   # float32 doubles every KV cache
   timing: {kind: timing, draft: small}
 
 # ---- production: vLLM (read by experiments/m2.run_serving) ---------------------------------------------
