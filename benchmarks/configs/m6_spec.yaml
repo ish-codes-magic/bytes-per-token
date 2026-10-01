@@ -22,7 +22,7 @@ tasks:                                            # one container each
   agree_fp8: {kind: agreement, drafts: [small],
               target: {name: fp8, compressed: /cache/m4/Qwen3-1.7B-fp8, format: fp8, act: token}}
   agree_awq: {kind: agreement, drafts: [small], target: {name: awq, compressed: /cache/m4/Qwen3-1.7B-awq}}
-  loop: {kind: loop, draft: small, k: 4, prompts_per_task: 2, max_new_tokens: 96}
+  loop: {kind: loop, draft: small, k: 4, prompts_per_task: 4, max_new_tokens: 96, dtypes: [bfloat16, float32]}
   lossless: {kind: lossless, draft: small, k: 3, samples: 1000, tokens: 4}
   timing: {kind: timing, draft: small}
 

@@ -299,16 +299,14 @@ def run_task(
         if spec["kind"] == "loop":
             some = [p for t in ref["tasks"] for p in prompts[t][: spec["prompts_per_task"]]]
             params = SamplingParams(max_new_tokens=spec["max_new_tokens"], stop_token_ids=stop)
-            records = [
-                record(
-                    "m6_loop_check",
-                    {
-                        "target": target_name,
-                        "drafter": spec["draft"],
-                        **loop_check(target, draft, some, params, spec["k"]),
-                    },
-                )
-            ]
+            records = []
+            for dtype in spec.get("dtypes", ["bfloat16"]):
+                # float32 is the control: if outputs differ in BF16 only, the cause is rounding at near-ties
+                target.to(getattr(torch, dtype))
+                draft.to(getattr(torch, dtype))
+                check = loop_check(target, draft, some, params, spec["k"])
+                names = {"target": target_name, "drafter": spec["draft"], "dtype": dtype}
+                records.append(record("m6_loop_check", {**names, **check}))
         elif spec["kind"] == "lossless":
             records = []
             for t in ref["tasks"]:
