@@ -8,6 +8,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
+from matplotlib.ticker import NullFormatter, ScalarFormatter
 
 from fastserve.kv.prefix_cache import replay
 from fastserve.kv.sizing import KVSpec, bytes_per_token
@@ -104,6 +105,8 @@ def key_value_channels(m5: Records, layer: str = "14") -> tuple[plt.Figure, str]
     ax.set(
         yscale="log", xlabel="layer", ylabel="largest ÷ median channel", title="Outlier channels, every layer"
     )
+    ax.yaxis.set_major_formatter(ScalarFormatter())  # plain numbers, not 6×10¹
+    ax.yaxis.set_minor_formatter(NullFormatter())
     ax.legend(fontsize=8)
     fig.tight_layout()
     k, v = _median(stats["key_ratio"]), _median(stats["value_ratio"])
@@ -177,19 +180,29 @@ def radix_tree(specs: list[Any], conversations: int) -> tuple[plt.Figure, str]:
     fig, ax = plt.subplots(figsize=(11, 6))
     norm = LogNorm(vmin=1, vmax=max(n.hits + 1 for n in cache.nodes()))
     cmap = plt.get_cmap("viridis")
-    for node in cache.nodes():
+    for node in cache.nodes():  # one outlined block per node, across every conversation that shares it
         rows = sorted(row[c] for c in covers.get(node.id, ()))
-        for r in rows:  # one rectangle per conversation row (blocks of shared nodes merge visually)
-            ax.add_patch(
-                plt.Rectangle(
-                    (starts[node.id], r), len(node.tokens), 0.9, color=cmap(norm(node.hits + 1)), lw=0
-                )
-            )
+        if not rows:
+            continue
+        block = plt.Rectangle(
+            (starts[node.id], rows[0]),
+            len(node.tokens),
+            rows[-1] - rows[0] + 1,
+            facecolor=cmap(norm(node.hits + 1)),
+            edgecolor="white",
+            lw=0.6,
+        )
+        ax.add_patch(block)
+    groups: dict[tuple, list[int]] = {}
+    for c in order:
+        groups.setdefault(apps[c], []).append(row[c])
+    ticks = [sum(rows) / len(rows) + 0.5 for rows in groups.values()]
+    ax.set_yticks(ticks, [f"app {i + 1}" for i in range(len(groups))])
     ax.set(
         xlim=(0, max(len(p) for p in prompts)),
         ylim=(conversations, 0),
         xlabel="token position in the prompt",
-        ylabel="conversation (grouped by app)",
+        ylabel="conversations, grouped by app",
     )
     fig.colorbar(
         plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, label="requests that reused the node + 1"
@@ -240,6 +253,7 @@ def prefix_ttft(m5: Records, workload: str = "multi_turn") -> tuple[plt.Figure, 
             yscale="log",
         )
         axes[1, col].set(xlabel="request", ylabel="prompt tokens prefilled (cumulative)")
+        axes[1, col].legend(fontsize=8)
         axes[0, col].legend(fontsize=8)
         on = summary_stat(m5, model, "prefix-on", workload, "ttft_ms")
         off = summary_stat(m5, model, "prefix-off", workload, "ttft_ms")
@@ -252,23 +266,36 @@ def prefix_ttft(m5: Records, workload: str = "multi_turn") -> tuple[plt.Figure, 
     return fig, "Prefix caching on the multi-turn workload: " + "; ".join(lines) + "."
 
 
+SETUPS = {  # what each server is, in words
+    "bf16kv": "BF16",
+    "bf16kv-flashinfer": "BF16 on FlashInfer",
+    "fp8kv": "FP8 KV",
+    "fp8w-fp8kv": "FP8 weights + FP8 KV",
+    "prefix-off": "no caching",
+    "prefix-on": "prefix caching",
+}
+
+
 def waterfall_v2(m5: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figure, str]:
-    """$ per 1M output tokens: BF16, then each M5 change as a step, in the regime where it applies."""
+    """$ per 1M output tokens: BF16, then each M5 change as a step, in the regime where it applies.
+
+    FP8 KV on the L4 also switches the attention kernel to FlashInfer, so that switch gets its own step:
+    the FP8-KV step is then what storing the cache in 8 bits buys on the same kernel.
+    """
+    fp8 = [
+        ("bf16kv", "BF16"),
+        ("bf16kv-flashinfer", "FlashInfer kernel"),
+        ("fp8kv", "+ FP8 KV"),
+        ("fp8w-fp8kv", "+ FP8 weights"),
+    ]
     regimes = [
-        (
-            "saturated server",
-            "saturation",
-            [("bf16kv", "BF16"), ("fp8kv", "+ FP8 KV"), ("fp8w-fp8kv", "+ FP8 weights")],
-        ),
-        (
-            "96 users, 4k prompts",
-            "capacity",
-            [("bf16kv", "BF16"), ("fp8kv", "+ FP8 KV"), ("fp8w-fp8kv", "+ FP8 weights")],
-        ),
+        ("saturated server", "saturation", fp8),
+        ("96 users, 4k prompts", "capacity", fp8),
         ("multi-turn chat", "multi_turn", [("prefix-off", "no caching"), ("prefix-on", "+ prefix caching")]),
     ]
     fig, axes = plt.subplots(len(regimes), 2, figsize=(11, 10))
-    found = {}
+    cheapest: dict[tuple[str, str], tuple[str, float]] = {}
+    kernel: dict[tuple[str, str], float] = {}
     for row, (title, workload, steps) in enumerate(regimes):
         for col, model in enumerate((SMALL, LARGE)):
             ax, costs = axes[row, col], []
@@ -278,38 +305,41 @@ def waterfall_v2(m5: Records, dollars_per_hour: float = 0.80) -> tuple[plt.Figur
                     p["output_tok_s"] if p else summary_stat(m5, model, label, workload, "output_throughput")
                 )
                 if tok_s:
-                    costs.append((name, dollars_per_hour / (tok_s * 3600) * 1e6))
+                    costs.append((label, name, dollars_per_hour / (tok_s * 3600) * 1e6))
             if not costs:
                 ax.axis("off")
                 continue
-            base = costs[0][1]
-            for i, (_name, cost) in enumerate(costs):
+            base = costs[0][2]
+            for i, (_label, _name, cost) in enumerate(costs):
                 if i == 0:
                     ax.bar(i, base, color=BASELINE_GRAY)
                     continue
-                prev = costs[i - 1][1]
-                ax.bar(
-                    i,
-                    cost - prev,
-                    bottom=prev,
-                    color=OKABE_ITO["green"] if cost < prev else OKABE_ITO["vermillion"],
-                )
+                prev = costs[i - 1][2]
+                color = OKABE_ITO["green"] if cost < prev else OKABE_ITO["vermillion"]
+                ax.bar(i, cost - prev, bottom=prev, color=color)
                 ax.annotate(
                     f"{cost / prev - 1:+.0%}", (i, max(cost, prev)), ha="center", va="bottom", fontsize=8
                 )
-            ax.set_xticks(range(len(costs)), [n for n, _ in costs], fontsize=8)
+            ax.set_xticks(range(len(costs)), [name for _, name, _ in costs], fontsize=8)
             ax.set(title=f"{model.split('/')[-1]}, {title}", ylabel="$ per 1M output tokens")
-            ax.set_ylim(0, max(c for _, c in costs) * 1.15)
-            found[model, workload] = costs[-1][1] / base - 1
+            ax.set_ylim(0, max(c for _, _, c in costs) * 1.15)
+            label, _, cost = min(costs, key=lambda c: c[2])
+            cheapest[model, title] = (SETUPS[label], cost / base - 1)
+            by_label = {label: cost for label, _, cost in costs}
+            if "bf16kv-flashinfer" in by_label:
+                kernel[model, title] = by_label["bf16kv-flashinfer"] / base - 1
     fig.tight_layout()
-    parts = [
-        f"{w.replace('_', '-')} {found[(SMALL, w)]:+.0%}"
-        for w in ("saturation", "capacity", "multi_turn")
-        if (SMALL, w) in found
-    ]
-    return fig, "Waterfall v2 on Qwen3-0.6B, cost per 1M tokens against BF16 without caching: " + ", ".join(
-        parts
-    ) + "."
+    parts = []
+    for title, _, _ in regimes:
+        if (SMALL, title) not in cheapest:
+            continue
+        setup, change = cheapest[SMALL, title]
+        note = setup
+        if (SMALL, title) in kernel:
+            note += f"; the FlashInfer kernel alone {kernel[SMALL, title]:+.0%}"
+        parts.append(f"{title} {change:+.0%} ({note})")
+    caption = "Waterfall v2, Qwen3-0.6B, the cheapest setup against BF16: " + ", ".join(parts) + "."
+    return fig, caption
 
 
 def make_all(

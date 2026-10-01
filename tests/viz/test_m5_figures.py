@@ -39,4 +39,6 @@ def test_every_figure_renders_with_a_data_driven_caption(m5_records, m5_policies
     assert "ran 40 (BF16) vs 80 (FP8)" in captions["m5_concurrency.caption.txt"]
     assert "8 prompts" in captions["m5_radix_tree.caption.txt"]
     assert "TTFT p50 200 → 50 ms" in captions["m5_prefix_ttft.caption.txt"]
-    assert "saturation -38%" in captions["m5_waterfall.caption.txt"]  # 1 / 1.6 − 1
+    waterfall = captions["m5_waterfall.caption.txt"]  # speeds 1.0, 1.1 (FlashInfer), 1.5 (FP8 KV), 1.6
+    assert "saturated server -38% (FP8 weights + FP8 KV; the FlashInfer kernel alone -9%)" in waterfall
+    assert "multi-turn chat -33% (prefix caching)" in waterfall
