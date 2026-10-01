@@ -1,5 +1,8 @@
 # Gate Report: M4, quantization in production
 
+> **Gate decision (2026-10-01):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.4-quant-production`. The owner also approved publishing the checkpoints on Hugging Face.
+
 ## What was built
 
 - **Production checkpoints** from llm-compressor 0.14.0
