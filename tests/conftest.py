@@ -668,6 +668,7 @@ def m5_records() -> list[dict[str, Any]]:
                     "model": model,
                     "kv_cache_tokens": int(170_000 * kv[label]),
                     "kv_cache_memory_gib": 18.0,
+                    "model_memory_gib": 1.0,
                     "max_concurrency": 4.0 * kv[label],
                     "attention_backend": "FLASH_ATTN" if label == "bf16kv" else "FLASHINFER",
                 },

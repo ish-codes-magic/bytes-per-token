@@ -81,7 +81,7 @@ def m4_blocks(m4: list, m2_quality: list, m3: list, configs: dict, bandwidth: fl
     }
 
 
-def m5_blocks(m5: list, m4: list, m2_quality: list, configs: dict) -> dict[str, str]:
+def m5_blocks(m5: list, m4: list, m2_quality: list, configs: dict, bandwidth: float) -> dict[str, str]:
     import yaml
 
     predictions = json.loads((REPO / "benchmarks" / "predictions" / "m5.json").read_text(encoding="utf-8"))
@@ -92,7 +92,7 @@ def m5_blocks(m5: list, m4: list, m2_quality: list, configs: dict) -> dict[str, 
         "m5_predictions": prediction_table(predictions, m5_report.m5_observables(m5, m4)),
         "m5_policies": m5_report.policy_table(m5, config["policies"], configs[SMALL], kv_bytes),
         "m5_kv_serving": m5_report.kv_serving_table(m5),
-        "m5_saturation": m5_report.saturation_table(m5),
+        "m5_saturation": m5_report.saturation_table(m5, bandwidth),
         "m5_prefix": m5_report.prefix_table(m5),
         "m5_vllm_quality": m5_report.vllm_quality_table(m5, m2_quality, m4),
     }
@@ -223,7 +223,8 @@ def build_blocks() -> dict[str, str]:
         blocks.update(m4_blocks(*records, configs, bandwidth))
         kv = REPO / "results" / "raw" / "m5_kv.jsonl"
         if kv.exists():
-            blocks.update(m5_blocks(read_jsonl(kv), read_jsonl(production), read_jsonl(quality), configs))
+            m5_records = read_jsonl(kv), read_jsonl(production), read_jsonl(quality)
+            blocks.update(m5_blocks(*m5_records, configs, bandwidth))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)

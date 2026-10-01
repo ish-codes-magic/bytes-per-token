@@ -365,14 +365,23 @@ def _preemptions(m: dict[str, Any] | None) -> float | None:
     return values[-1] - values[0] if values else None
 
 
-def saturation_table(m5: Records) -> str:
-    """A saturated step per server: how many sequences run, how full the cache is, how long a step takes."""
+def saturation_table(m5: Records, bandwidth: float) -> str:
+    """A saturated step per server: how many sequences run, how full the cache is, how long a step takes, and
+    how much of that time streaming its bytes would need at M0's measured bandwidth.
+
+    Bytes per step = the weights + the KV cache in use, both as vLLM reports them (model memory, and the used
+    fraction of its KV allocation).
+    """
     rows = []
     for model in (SMALL, LARGE):
         for label in KV_LABELS:
-            p = held(m5, model, label, "saturation")
-            if not p:
+            p, s = held(m5, model, label, "saturation"), start(m5, model, label)
+            if not p or not s:
                 continue
+            moved = (
+                s["model_memory_gib"] + p["kv_usage"] * s["kv_cache_memory_gib"]
+            ) * 2**30  # bytes per step
+            streaming_ms = 1e3 * moved / bandwidth
             rows.append(
                 [
                     model.split("/")[-1],
@@ -380,6 +389,8 @@ def saturation_table(m5: Records) -> str:
                     _f(p["running"], 0),
                     _f(100 * p["kv_usage"], 0, "%"),
                     _f(p["step_ms"], 0),
+                    _f(moved / 1e9, 1),
+                    _f(100 * streaming_ms / p["step_ms"], 0, "%"),
                     _f(p["prompt_per_step"], 0),
                     _f(_preemptions(serving(m5, model, label, "saturation")), 0),
                     _f(p["output_tok_s"], 0),
@@ -391,6 +402,8 @@ def saturation_table(m5: Records) -> str:
         "Running",
         "KV cache used",
         "Step (ms)",
+        "GB read per step",
+        "Memory-bound share of the step",
         "Prompt tokens per step",
         "Preemptions",
         "Output tokens/s",

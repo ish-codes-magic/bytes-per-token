@@ -61,5 +61,6 @@ def test_tables(m5_records, m4, m2_quality, m5_policies):
 
 
 def test_saturation_table_shows_the_step(m5_records):
-    table = saturation_table(m5_records)
-    assert "| Qwen3-0.6B | FP8 KV | 250 | 90% | 50 | 50 | 0 | 3,000 |" in table  # 20 steps/s, 1,000 prompt/s
+    table = saturation_table(m5_records, bandwidth=2**30 * 17.2 / 0.05)  # streams 17.2 GiB in 50 ms
+    # 20 steps/s → 50 ms; 1 GiB of weights + 0.9 × 18 GiB of KV = 17.2 GiB = 18.5 GB: all of the step
+    assert "| Qwen3-0.6B | FP8 KV | 250 | 90% | 50 | 18.5 | 100% | 50 | 0 | 3,000 |" in table
