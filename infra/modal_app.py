@@ -747,6 +747,19 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             peaks = measured_peak_flops(raw["hw"])
             hw = {"bandwidth": measured_bandwidth(raw["hw"]), "bf16": peaks["bf16"], "fp8": peaks["fp8"]}
             written = m4_figures.make_all(raw["m4"], configs, hw, tmp)
+        elif milestone == "m5":
+            import yaml
+
+            from fastserve.viz import m5_figures
+
+            config = yaml.safe_load(
+                Path(REMOTE, "benchmarks", "configs", "m5_kv.yaml").read_text(encoding="utf-8")
+            )
+            workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
+            cfg = ModelConfig.from_pretrained_json(
+                Path(REMOTE, "benchmarks", "models", "Qwen3-0.6B.config.json")
+            )
+            written = m5_figures.make_all(raw["m5"], config["policies"], cfg, workloads, tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -888,14 +901,14 @@ def figures(milestone: str = "all") -> None:
         from fastserve.report.m2 import newest_per_model
 
         raw["m2q"] = newest_per_model(read_jsonl(quality))
-    for key, file in (("m3", "m3_quant.jsonl"), ("m4", "m4_production.jsonl")):
+    for key, file in (("m3", "m3_quant.jsonl"), ("m4", "m4_production.jsonl"), ("m5", "m5_kv.jsonl")):
         if (
             raw_dir / file
         ).exists():  # every run: tasks can be re-run, and the reports keep the newest result
             raw[key] = read_jsonl(raw_dir / file)
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2", "m3", "m4"] if milestone == "all" else [milestone]:
+    for ms in ["m0", "m1", "m2", "m3", "m4", "m5"] if milestone == "all" else [milestone]:
         if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():
