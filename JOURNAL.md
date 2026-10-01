@@ -271,4 +271,35 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   - StreamingLLM's KL (0.038) was *below* the predicted range while its needle score was 32%: WikiText barely
     uses context beyond 1,000 tokens. KL alone would have called eviction safe.
 - **Cost:** M5's campaign ran ~22 containers in parallel. Billing will show it under October's credit.
+- **Gate M5 approved** (questions deferred). Tagged `v0.5-kv-cache`. Started M6 (speculative decoding);
+  predictions committed in `995a42e` before any measurement.
+- **vLLM 0.30 speculative decoding, read from the installed source:** `--speculative-config` JSON with
+  `method` in {draft_model, ngram, eagle3, suffix, ...}, `num_speculative_tokens`, and for n-gram
+  `prompt_lookup_max/min`. It also has a built-in draft-length schedule by batch size
+  (`num_speculative_tokens_per_batch_size`). Counters: `vllm:spec_decode_num_{drafts,draft_tokens,
+  accepted_tokens}` and `..._accepted_tokens_per_pos` (labeled by position). A public EAGLE-3 head exists
+  for our target: `AngelSlim/Qwen3-1.7B_eagle3`.
+- **Design: one interface, `logits_after(context, last)`.** A cached nanoserve model and a toy bigram table
+  both implement it, so the same draft-verify loop runs on real models and on a model whose exact output
+  distribution is known. KV "rollback" after a rejection is just overwriting from the first differing
+  position: stale slots sit past the current position, where the causal mask can't see them.
+- **Insight that made the experiment cheap:** under greedy decoding, while a draft matches, the drafter sees
+  the target's own context. One teacher-forced drafter pass over the target's output gives a bit per
+  position, and the speculative run for *every* k follows from the bits. A test checks the replay equals the
+  real loop's rounds on tiny models.
+- **Dead end: a negative control that was too weak.** The first "lying drafter" reported a uniform q. On the
+  toy model the chi-square test caught it, but on tiny Qwen3 models with 1,000 samples it slipped under the 5σ
+  limit (74 vs 103). A weak control proves little. It now reports q ≈ 0, so every draft token is accepted
+  and the output follows the *drafter*: caught decisively.
+- **Dead end: the EAGLE-3 head wouldn't load.** "Cannot find any model weights": my download helper fetches
+  only `*.safetensors` and config files, and the head ships its weights in another format. Drafters now get
+  their whole repo.
+- **Surprise: nanoserve's drafter step costs as much as its target step** (45 ms vs 46 ms at a 621-token
+  context). Both models have 28 layers, and the reference engine at batch 1 is bound by per-layer overhead
+  (Python, kernel launches), not by streaming weights. So "c" is ~1 in nanoserve, and draft-model speculation
+  can't pay there. The memory-bound claim that *is* visible: a target pass over 4 new tokens costs 1.05× a
+  pass over 1 (9 tokens: 1.09×). Speed is measured in vLLM.
+- **Surprise: the real loop's greedy output matched plain greedy on only 5 of 8 prompts** (BF16), diverging
+  at tokens 3, 31 and 38. Hypothesis: a k+1-token pass and a 1-token pass round differently in BF16, which
+  flips near-ties. Added a float32 control to test that, instead of assuming it.
 
