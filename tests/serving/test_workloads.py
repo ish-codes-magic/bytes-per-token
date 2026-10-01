@@ -35,3 +35,29 @@ def test_poisson_arrivals_have_the_requested_rate():
     assert times[0] == 0.0 and all(g >= 0 for g in gaps)
     assert statistics.fmean(gaps) == pytest.approx(1 / 8, rel=0.05)
     assert statistics.stdev(gaps) == pytest.approx(1 / 8, rel=0.1)  # exponential: std = mean
+
+
+def test_conversations_extend_each_turn_and_group_by_app():
+    cfg = {
+        "shared_prefix_len": 30,
+        "prefixes": 2,
+        "turns": 3,
+        "reply_len": 7,
+        "input_len": 5,
+        "output_len": 4,
+        "num_requests": 12,  # 4 conversations × 3 turns
+    }
+    specs = Workload.from_config("multi_turn", cfg).requests()
+    assert [len(s.prompt) for s in specs] == [35] * 4 + [47] * 4 + [59] * 4  # + reply 7 + message 5 per turn
+    first, second = specs[:4], specs[4:8]
+    for a, b in zip(first, second, strict=True):
+        assert b.prompt[: len(a.prompt)] == a.prompt  # each turn extends the conversation's previous prompt
+    apps = [tuple(s.prompt[:30]) for s in first]
+    assert apps[0] == apps[2] != apps[1] == apps[3]  # conversations alternate between the two apps
+    assert Workload.from_config("multi_turn", cfg).requests() == specs
+
+
+def test_single_prefix_workloads_are_unchanged_by_the_conversation_fields():
+    cfg = {"input_len": 20, "output_len": 5, "num_requests": 3, "shared_prefix_len": 10}
+    plain = Workload.from_config("agent", cfg).requests()
+    assert plain == Workload.from_config("agent", {**cfg, "prefixes": 1, "turns": 1}).requests()

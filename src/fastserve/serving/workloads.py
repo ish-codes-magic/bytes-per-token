@@ -55,6 +55,9 @@ class Workload:
     output_len: LengthDist
     num_requests: int
     shared_prefix_len: int = 0  # tokens every request starts with (a system prompt, tool descriptions)
+    prefixes: int = 1  # distinct shared prefixes (apps), each `shared_prefix_len` long
+    turns: int = 1  # turns per conversation: each turn's prompt extends the previous turn's
+    reply_len: int = 0  # tokens standing in for the assistant's previous answer between turns
     seed: int = 0
     vocab_size: int = DEFAULT_VOCAB
 
@@ -66,17 +69,51 @@ class Workload:
             output_len=LengthDist.from_config(cfg["output_len"]),
             num_requests=cfg["num_requests"],
             shared_prefix_len=cfg.get("shared_prefix_len", 0),
+            prefixes=cfg.get("prefixes", 1),
+            turns=cfg.get("turns", 1),
+            reply_len=cfg.get("reply_len", 0),
             seed=cfg.get("seed", 0),
         )
 
     def requests(self) -> list[RequestSpec]:
         """The same list every time (seeded): every load point and configuration sees identical requests."""
+        if self.turns > 1 or self.prefixes > 1:
+            return self._conversations()
         rng = random.Random(self.seed)
         prefix = [rng.randrange(self.vocab_size) for _ in range(self.shared_prefix_len)]
         specs = []
         for i in range(self.num_requests):
             suffix = [rng.randrange(self.vocab_size) for _ in range(self.input_len.sample(rng))]
             specs.append(RequestSpec(id=i, prompt=prefix + suffix, max_tokens=self.output_len.sample(rng)))
+        return specs
+
+    def _conversations(self) -> list[RequestSpec]:
+        """Multi-turn chats across several apps: the structure a radix-tree prefix cache is built for.
+
+        Conversation c belongs to app c mod `prefixes` and starts with that app's system prompt. Turn t's
+        prompt is turn t−1's prompt + a stand-in reply (`reply_len` tokens) + a new user message. Requests
+        are ordered turn by turn (every conversation's first turn, then every second turn, ...), so a turn's
+        predecessor has usually finished, as in real chat traffic.
+        """
+        rng = random.Random(self.seed)
+
+        def tokens(n: int) -> list[int]:
+            return [rng.randrange(self.vocab_size) for _ in range(n)]
+
+        systems = [tokens(self.shared_prefix_len) for _ in range(self.prefixes)]
+        conversations = self.num_requests // self.turns
+        history = [list(systems[c % self.prefixes]) for c in range(conversations)]
+        specs = []
+        for turn in range(self.turns):
+            for c in range(conversations):
+                if turn:
+                    history[c] += tokens(self.reply_len)
+                history[c] += tokens(self.input_len.sample(rng))
+                specs.append(
+                    RequestSpec(
+                        id=len(specs), prompt=list(history[c]), max_tokens=self.output_len.sample(rng)
+                    )
+                )
         return specs
 
 
