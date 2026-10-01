@@ -351,3 +351,48 @@ def vllm_quality_table(m5: Records, m2_quality: Records, m4: Records) -> str:
 def capacity_budget(cfg: Any, kv_bytes: float, spec: KVSpec) -> int:
     """Tokens the L4's KV budget holds in a format (the sizing model behind the concurrency figure)."""
     return max_tokens(cfg, kv_bytes, spec)
+
+
+def _preemptions(m: dict[str, Any] | None) -> float | None:
+    if not m or "server_timeline" not in m:
+        return None
+    cols = {c: i for i, c in enumerate(m["server_timeline"]["columns"])}
+    if "preemptions" not in cols:
+        return None
+    values = [
+        r[cols["preemptions"]] for r in m["server_timeline"]["rows"] if r[cols["preemptions"]] is not None
+    ]
+    return values[-1] - values[0] if values else None
+
+
+def saturation_table(m5: Records) -> str:
+    """A saturated step per server: how many sequences run, how full the cache is, how long a step takes."""
+    rows = []
+    for model in (SMALL, LARGE):
+        for label in KV_LABELS:
+            p = held(m5, model, label, "saturation")
+            if not p:
+                continue
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    KV_LABELS[label],
+                    _f(p["running"], 0),
+                    _f(100 * p["kv_usage"], 0, "%"),
+                    _f(p["step_ms"], 0),
+                    _f(p["prompt_per_step"], 0),
+                    _f(_preemptions(serving(m5, model, label, "saturation")), 0),
+                    _f(p["output_tok_s"], 0),
+                ]
+            )
+    headers = [
+        "Model",
+        "Server",
+        "Running",
+        "KV cache used",
+        "Step (ms)",
+        "Prompt tokens per step",
+        "Preemptions",
+        "Output tokens/s",
+    ]
+    return markdown_table(headers, rows)

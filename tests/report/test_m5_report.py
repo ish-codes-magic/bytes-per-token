@@ -9,6 +9,7 @@ from fastserve.report.m5 import (
     m5_observables,
     policy_table,
     prefix_table,
+    saturation_table,
     vllm_quality_table,
 )
 from fastserve.results import make_record
@@ -57,3 +58,8 @@ def test_tables(m5_records, m4, m2_quality, m5_policies):
     assert "| Qwen3-0.6B | multi-turn | on | 60.0% | 50 | 10.00 | 750 |" in prefix
     quality = vllm_quality_table(m5_records, m2_quality, m4)
     assert "| Qwen3-0.6B | 20.00 | 20.20 | 1.00% | 100% | 100% |" in quality
+
+
+def test_saturation_table_shows_the_step(m5_records):
+    table = saturation_table(m5_records)
+    assert "| Qwen3-0.6B | FP8 KV | 250 | 90% | 50 | 50 | 0 | 3,000 |" in table  # 20 steps/s, 1,000 prompt/s
