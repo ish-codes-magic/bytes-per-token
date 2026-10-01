@@ -97,3 +97,23 @@ def test_bytes_model_counts_the_bf16_head_and_fits_overhead_on_bf16(m4_records):
     table = bytes_model_table(m4_records, configs, bandwidth=1e9)
     assert "| Qwen3-0.6B | BF16 |" in table and "| 0.0% |" in table  # the overhead is fitted on BF16
     assert "| 1 | 1.33× | 1.33× |" in crossover_table(m4_records, batches=(1,))  # 2.0 / 1.5
+
+
+def test_model_card_compares_with_bf16_and_flags_talking_past_the_answer(m4_records, m2_quality):
+    import copy
+
+    from fastserve.report.model_card import model_card, repo_name
+
+    records = copy.deepcopy(m4_records)
+    for r in records:
+        if r["experiment"] == "m4_checkpoint":
+            r["config"] = {"calibration": {"samples": 128, "seq_len": 2048, "source": "c4"}}
+    card = model_card(records, m2_quality, "Qwen/Qwen3-0.6B", "gptq", commit="0123456789abcdef")
+    assert card.startswith("---\nlicense: apache-2.0\nbase_model: Qwen/Qwen3-0.6B\n")
+    assert "128 sequences × 2,048 tokens of C4" in card
+    assert "| GSM8K 5-shot, flexible-extract | 42.0% | 35.0% |" in card  # BF16 from M2, GPTQ from M4
+    assert "(30% of problems, vs 10% for BF16)" in card
+    assert "commit `0123456789`" in card
+    fp8 = model_card(records, m2_quality, "Qwen/Qwen3-0.6B", "fp8", commit="0" * 10)
+    assert "**Calibration data:** None." in fp8 and "keeps writing" not in fp8
+    assert repo_name("Qwen/Qwen3-1.7B", "awq") == "Qwen3-1.7B-W4A16-AWQ"
