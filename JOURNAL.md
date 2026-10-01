@@ -223,4 +223,30 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **Dead end in that diagnosis:** I first measured how far each copy sat from the stored grid. Both were
   equally off, because the BF16 product of code and scale rounds. Counting grid steps between the two copies
   was the measure that worked.
+- **Started M5 (KV-cache engineering).** Predictions committed in `b93afc6` before any measurement.
+- **vLLM 0.30 API notes (read from the installed source):**
+  - The attention backend is chosen with `--attention-backend FLASHINFER`; there is no
+    `VLLM_ATTENTION_BACKEND` environment variable in this version.
+  - FP8 KV defaults to a per-tensor scale of 1.0.
+  - On the L4 FP8 KV forces FlashInfer: FlashAttention's FP8 path needs FA3 on Hopper. So every FP8-KV
+    comparison needs a BF16-KV-on-FlashInfer control, now in the config.
+  - Prefix-cache counters are `vllm:prefix_cache_{queries,hits}`. Per-request cached tokens need
+    `--enable-prompt-tokens-details`.
+- **What capped M4's saturated batch:** every saturated run peaked at exactly 256 running: vLLM's default
+  `max_num_seqs`, not the cache. The cache also hit 100% at times, with preemptions (42 on 0.6B, 363 on 1.7B).
+  So at saturation FP8 KV can't raise the batch, only halve the KV bytes per step. A new `capacity` workload
+  (96 users × 4k-token prompts) isolates the capacity effect.
+- **A false-hit trap avoided:** the new multi-turn workload with seed 0 would have started with the same
+  random tokens as M2's shared-prefix workload, giving vLLM cross-workload cache hits. It has its own seed,
+  and each prefix-caching server runs one load per workload, so no load replays requests into a warm cache.
+- **Surprise: Qwen3's keys have huge fixed outlier channels.** In layer 0, KV head 0, key channel 50 reaches
+  |452|, with a median channel max of 5.8. That's just past FP8 E4M3's largest value (448), so at vLLM's
+  default scale of 1.0 that channel saturates. QK-norm doesn't prevent outliers; its learned per-channel
+  weight creates them.
+  - Consequence: per-token INT8 KV cost KL 0.019, *more* than FP8's 0.015 (predicted 0.0002–0.003). One
+    channel at 452 stretches each token's grid to steps of ~2 for channels near 5.
+  - **Control added after seeing this (not a prediction):** INT8 with per-channel keys (KIVI-style) costs KL
+    0.0014, 13× less. The cause is the outlier channels, not the bit width.
+  - INT4 per-token keys are catastrophic (KL 6.0, top-1 10%); rotating the keys helps (1.0) but isn't
+    enough when one channel holds most of the vector's energy; KIVI's per-channel keys reach 0.032.
 
