@@ -45,3 +45,17 @@ def attention(
     scores = scores.masked_fill(~mask, float("-inf"))
     probs = torch.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)  # softmax in fp32 for stability
     return probs @ v
+
+
+def attention_sdpa(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor, scale: float
+) -> torch.Tensor:
+    """The same computation through PyTorch's fused scaled_dot_product_attention (tested against `attention`).
+
+    The fused kernel never holds the [q_len × kv_len] score matrix in memory, which the reference does: at a
+    32k-token context that matrix alone would be gigabytes per layer. K and V are expanded to every query
+    head first, so the memory-efficient kernel (which takes an arbitrary mask) can run.
+    """
+    group = q.shape[1] // k.shape[1]
+    k, v = repeat_kv(k, group), repeat_kv(v, group)
+    return torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=scale)

@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from fastserve.engine import rope
-from fastserve.engine.attention import attention, causal_mask
+from fastserve.engine.attention import attention, attention_sdpa, causal_mask
 from fastserve.engine.config import ModelConfig
 from fastserve.engine.kv_cache import KVCache
 
@@ -47,6 +47,7 @@ class Attention(nn.Module):
         self.q_norm = RMSNorm(hd, cfg.rms_norm_eps)  # QK-norm: normalizes each head's vector
         self.k_norm = RMSNorm(hd, cfg.rms_norm_eps)
         self.kv_policy = None  # M5: what a quantized or evicting cache keeps (fastserve.kv.quant)
+        self.attend = attention  # the reference; use_fused_attention() swaps in the fused kernel
 
     def forward(
         self,
@@ -75,7 +76,7 @@ class Attention(nn.Module):
         mask = causal_mask(positions, k.shape[2])
         if self.kv_policy is not None:  # an evicting cache no longer holds some slots
             mask = self.kv_policy.visible(mask, positions)
-        out = attention(q, k, v, mask, scale=hd**-0.5)  # [B, Hq, Q, D]
+        out = self.attend(q, k, v, mask, scale=hd**-0.5)  # [B, Hq, Q, D]
         return self.o_proj(out.transpose(1, 2).reshape(b, q_len, -1))
 
 
@@ -164,3 +165,10 @@ class CausalLM(nn.Module):
         if select is not None:  # e.g. only each prompt's last token: skips a [Q × vocab] matmul
             hidden = hidden[torch.arange(b, device=hidden.device), select]  # [B, d]
         return self.lm_head(hidden)
+
+
+def use_fused_attention(model: CausalLM, fused: bool = True) -> CausalLM:
+    """Run every layer's attention through PyTorch's fused kernel (or back through the reference)."""
+    for layer in model.model.layers:
+        layer.self_attn.attend = attention_sdpa if fused else attention
+    return model
