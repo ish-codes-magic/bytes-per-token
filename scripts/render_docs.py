@@ -23,6 +23,7 @@ from fastserve.hw.analysis import (  # noqa: E402
 )
 from fastserve.report import m4 as m4_report  # noqa: E402
 from fastserve.report import m5 as m5_report  # noqa: E402
+from fastserve.report import m6 as m6_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -95,6 +96,20 @@ def m5_blocks(m5: list, m4: list, m2_quality: list, configs: dict, bandwidth: fl
         "m5_saturation": m5_report.saturation_table(m5, bandwidth),
         "m5_prefix": m5_report.prefix_table(m5),
         "m5_vllm_quality": m5_report.vllm_quality_table(m5, m2_quality, m4),
+    }
+
+
+def m6_blocks(m6: list) -> dict[str, str]:
+    predictions = json.loads((REPO / "benchmarks" / "predictions" / "m6.json").read_text(encoding="utf-8"))
+    return {
+        "m6_predictions": prediction_table(predictions, m6_report.m6_observables(m6)),
+        "m6_agreement": m6_report.agreement_table(m6),
+        "m6_lossless": m6_report.lossless_table(m6),
+        "m6_loop": m6_report.loop_table(m6),
+        "m6_steps": m6_report.step_table(m6),
+        "m6_one_user": m6_report.one_user_table(m6),
+        "m6_batch": m6_report.batch_table(m6),
+        "m6_interaction": m6_report.interaction_table(m6),
     }
 
 
@@ -225,6 +240,9 @@ def build_blocks() -> dict[str, str]:
         if kv.exists():
             m5_records = read_jsonl(kv), read_jsonl(production), read_jsonl(quality)
             blocks.update(m5_blocks(*m5_records, configs, bandwidth))
+    spec = REPO / "results" / "raw" / "m6_spec.jsonl"
+    if spec.exists():
+        blocks.update(m6_blocks(read_jsonl(spec)))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
