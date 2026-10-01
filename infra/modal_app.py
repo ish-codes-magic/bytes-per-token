@@ -552,6 +552,23 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     from importlib.metadata import version
     from pathlib import Path
 
+    if topic == "spec":  # M6: vLLM's speculative-decoding config and metrics; drafters published for Qwen3
+        import vllm
+        from huggingface_hub import HfApi
+
+        root = Path(vllm.__file__).parent
+        source = (root / "config" / "speculative.py").read_text(encoding="utf-8")
+        methods = source[source.index("SpeculativeMethod = ") :][:400]
+        fields = source[source.index("class SpeculativeConfig") :][:7000]
+        lines = [f"vllm {version('vllm')}", methods, fields]
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in list(re.finditer(r"^.*(spec_decode_\w+).*$", text, re.M))[:6]:
+                lines.append(f"{path.relative_to(root)}: {match.group(0).strip()[:160]}")
+        for query in ("Qwen3-1.7B eagle", "Qwen3 eagle3", "Qwen3-1.7B speculator"):
+            found = [m.id for m in HfApi().list_models(search=query, limit=20)]
+            lines.append(f"Hub search {query!r}: {found}")
+        return "\n".join(lines)
     if topic == "kv":  # M5: KV-cache dtypes and scales, prefix-cache metrics, per-request cached tokens
         import re
 
