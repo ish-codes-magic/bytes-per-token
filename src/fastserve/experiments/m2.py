@@ -26,6 +26,10 @@ _FROM_LOG = {
     "kv_cache_tokens": (re.compile(r"GPU KV cache size: ([\d,]+) tokens"), int),
     "model_memory_gib": (re.compile(r"Model loading took ([\d.]+) ?GiB"), float),
     "kv_cache_memory_gib": (re.compile(r"Available KV cache memory: ([\d.]+) ?GiB"), float),
+    # M5: how many full-length requests fit at once, which attention kernel runs, and the cache's dtype
+    "max_concurrency": (re.compile(r"Maximum concurrency for [\d,]+ tokens per request: ([\d.]+)x"), float),
+    "attention_backend": (re.compile(r"Using (\S+?) (?:attention )?backend", re.I), str),
+    "kv_cache_dtype": (re.compile(r"Using (\S+) data type to store kv cache", re.I), str),
 }
 _KERNEL = re.compile(r"(Using \S*Kernel\S* for \S+|Selected \S*Kernel\S* for \S+)")
 
@@ -89,13 +93,15 @@ def run_serving(
             continue
         model, label, args = server_cfg["model"], server_cfg["label"], server_cfg.get("args", [])
         path = server_cfg.get("path") or model_dir(model)
-        with VLLMServer(path, served_name=model, extra_args=args) as server:
+        env = server_cfg.get("env")
+        with VLLMServer(path, served_name=model, extra_args=args, env=env) as server:
             add(
                 "server_start",
                 {
                     "label": label,
                     "model": model,
                     "args": args,
+                    "env": env,
                     "startup_s": server.startup_s,
                     **_from_log(server),
                 },

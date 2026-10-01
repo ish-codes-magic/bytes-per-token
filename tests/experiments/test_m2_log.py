@@ -12,6 +12,9 @@ INFO 10-01 12:00:02 [compressed_tensors_wNa16.py:88] Using MarlinLinearKernel fo
 INFO 10-01 12:00:02 [compressed_tensors_wNa16.py:88] Using MarlinLinearKernel for CompressedTensorsWNA16
 INFO 10-01 12:00:09 [gpu_worker.py:300] Available KV cache memory: 19.25 GiB
 INFO 10-01 12:00:09 [kv_cache_utils.py:900] GPU KV cache size: 180,224 tokens
+INFO 10-01 12:00:09 [kv_cache_utils.py:901] Maximum concurrency for 40,960 tokens per request: 4.40x
+INFO 10-01 12:00:03 [cuda.py:400] Using FLASHINFER attention backend out of potential backends: [...]
+INFO 10-01 12:00:03 [cache.py:70] Using fp8 data type to store kv cache. It reduces the GPU memory footprint
 """
 
 
@@ -28,6 +31,8 @@ def test_startup_facts_come_from_the_log(tmp_path):
     assert facts["model_memory_gib"] == pytest.approx(0.7512)
     assert facts["kv_cache_memory_gib"] == pytest.approx(19.25)
     assert facts["kernels"] == ["Using MarlinLinearKernel for CompressedTensorsWNA16"]
+    assert facts["max_concurrency"] == pytest.approx(4.40)
+    assert facts["attention_backend"] == "FLASHINFER" and facts["kv_cache_dtype"] == "fp8"
 
 
 def test_missing_lines_are_none(tmp_path):
