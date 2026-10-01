@@ -72,8 +72,10 @@ def _pair(rows: list[tuple[str, Any, Any, int, str]]) -> list[list[str]]:
     ]
 
 
-def model_card(m4: Records, m2_quality: Records, model: str, fmt: str, *, commit: str) -> str:
-    """The README.md of one published checkpoint."""
+def model_card(
+    m4: Records, m2_quality: Records, model: str, fmt: str, *, commit: str, repo: str = "<this repo>"
+) -> str:
+    """The README.md of one published checkpoint (`repo` is its Hub id, for the usage line)."""
     short = model.split("/")[-1]
     base_tasks, this_tasks = tasks(m4, m2_quality, model, "bf16"), tasks(m4, m2_quality, model, fmt)
     base_ppl, this_ppl = (_one(m4, "m4_vllm_perplexity", model, f) for f in ("bf16", fmt))
@@ -183,7 +185,7 @@ def model_card(m4: Records, m2_quality: Records, model: str, fmt: str, *, commit
         "## Use",
         "",
         "```bash",
-        "vllm serve <this repo>",
+        f"vllm serve {repo}",
         "```",
         "",
         "## How it was made",
