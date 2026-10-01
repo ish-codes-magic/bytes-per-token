@@ -252,7 +252,7 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **Correction:** the |452| above is KV head 0's peak. Over all heads, layer 0's largest key on Qwen3-0.6B is
   |506|. Qwen3-1.7B's peaks at |394|, inside FP8's range.
 - **M5 results (vLLM 0.30.0, L4; nanoserve for the KV policies):**
-  - 24 of 31 predictions in range. Capacity, 32k latency, needle recall and prefix caching behaved as modeled.
+  - 22 of 31 predictions in range. Capacity, 32k latency, needle recall and prefix caching behaved as modeled.
   - **The kernel confound was real and large.** BF16 KV on FlashInfer is 1.45× (0.6B) / 1.24× (1.7B) faster
     than on FlashAttention at saturation, with the same ~250 sequences and a full cache. FP8 KV's 2.19× is
     that kernel switch × FP8 storage (1.52×). Without the control I would have credited FP8 with all of it.
