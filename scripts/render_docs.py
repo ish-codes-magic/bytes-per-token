@@ -69,6 +69,7 @@ def m4_blocks(m4: list, m2_quality: list, m3: list, configs: dict, bandwidth: fl
         "m4_quality": m4_report.quality_table(m4, m2_quality),
         "m4_checkpoints": m4_report.checkpoint_table(m4),
         "m4_fidelity": m4_report.fidelity_table(m4),
+        "m4_reader_check": m4_report.reader_check_table(m4),
         "m4_gsm8k": m4_report.gsm8k_failure_table(m4, m2_quality),
         "m4_bytes_model": m4_report.bytes_model_table(m4, configs, bandwidth),
         "m4_crossover": m4_report.crossover_table(m4),

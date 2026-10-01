@@ -117,3 +117,22 @@ def test_model_card_compares_with_bf16_and_flags_talking_past_the_answer(m4_reco
     fp8 = model_card(records, m2_quality, "Qwen/Qwen3-0.6B", "fp8", commit="0" * 10)
     assert "**Calibration data:** None." in fp8 and "keeps writing" not in fp8
     assert repo_name("Qwen/Qwen3-1.7B", "awq") == "Qwen3-1.7B-W4A16-AWQ"
+
+
+def test_reader_check_counts_identical_tensors_and_grid_steps():
+    from fastserve.report.m4 import reader_check_table
+    from fastserve.results import make_record
+
+    def check(fmt, unequal, diagnosis):
+        metrics = {"model": "Qwen/Qwen3-0.6B", "format": fmt, "tensors": 310, "unequal_tensors": unequal}
+        return make_record(
+            "m4_decompress_check", {**metrics, "diagnosis": diagnosis}, run_id="t", env={}, git={}
+        )
+
+    records = [
+        check("fp8", [], {}),
+        check("awq", ["a"] * 196, {"unequal_fraction": 0.006, "max_diff_in_steps": 1.03}),
+    ]
+    table = reader_check_table(records)
+    assert "| Qwen3-0.6B | FP8 W8A8 | 310 / 310 | — | — |" in table
+    assert "| Qwen3-0.6B | INT4 W4A16 (AWQ) | 114 / 310 | 0.60% | 1.03 |" in table

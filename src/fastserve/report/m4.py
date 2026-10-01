@@ -390,3 +390,33 @@ def crossover_table(m4: Records, batches: tuple[int, ...] = (1, 4, 16, 64, 256))
         ]
         rows.append([str(batch), *(_f(r, 2, "×") for r in ratios)])
     return markdown_table(["Batch", "Qwen3-0.6B: INT4 ÷ FP8", "Qwen3-1.7B: INT4 ÷ FP8"], rows)
+
+
+def reader_check_table(m4: Records) -> str:
+    """Our compressed-checkpoint reader against llm-compressor's own dense export of each checkpoint."""
+    found = {(m["model"], m["format"]): m for m in _newest(m4, "m4_decompress_check")}
+    rows = []
+    for model in (SMALL, LARGE):
+        for fmt in FORMATS:
+            m = found.get((model, fmt))
+            if not m:
+                continue
+            diagnosis = m.get("diagnosis") or {}
+            fraction = diagnosis.get("unequal_fraction")
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    FORMAT_LABELS[fmt],
+                    f"{m['tensors'] - len(m['unequal_tensors'])} / {m['tensors']}",
+                    _f(None if fraction is None else 100 * fraction, 2, "%"),
+                    _f(diagnosis.get("max_diff_in_steps"), 2),
+                ]
+            )
+    headers = [
+        "Model",
+        "Format",
+        "Tensors identical",
+        "Weights that differ (first differing layer)",
+        "Largest difference (grid steps)",
+    ]
+    return markdown_table(headers, rows)
