@@ -10,7 +10,8 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 5 (KV-cache engineering). Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 5 (KV-cache engineering) is in gate review. Results appear below as
+> each milestone lands.
 
 ---
 
@@ -169,6 +170,49 @@ What M4 found:
 Details are in the [M4 learning doc](docs/learning/M4-quant-production.md) and the
 [gate report](docs/gates/M4-report.md).
 
+### M5: the KV cache
+
+At high load and long context the KV cache, not the weights, is the traffic. M5 stores it in fewer bits,
+evicts it, and reuses it across requests, judging each change on recall at up to 32k tokens. Waterfall v2
+credits each change separately. FP8 KV forces a different attention kernel on this GPU, so the kernel switch
+gets a step of its own:
+
+![Cost per 1M tokens: FP8 KV and prefix caching](results/figures/m5_waterfall.png)
+
+<!-- BEGIN GENERATED: caption-m5_waterfall -->
+*Waterfall v2, Qwen3-0.6B, the cheapest setup against BF16: saturated server -54% (FP8 KV; the FlashInfer kernel alone -31%); 96 users, 4k prompts -45% (FP8 weights + FP8 KV; the FlashInfer kernel alone -15%); multi-turn chat -40% (prefix caching).*
+<!-- END GENERATED: caption-m5_waterfall -->
+
+At what quality: vLLM with an FP8 cache against BF16 (WikiText-2 perplexity, and the needle grid from 1k to 32k
+tokens):
+
+<!-- BEGIN GENERATED: m5_vllm_quality -->
+| Model | Perplexity, BF16 KV | Perplexity, FP8 KV | Change | Needle, BF16 KV | Needle, FP8 KV |
+|---|---|---|---|---|---|
+| Qwen3-0.6B | 19.54 | 19.78 | 1.21% | 100% | 100% |
+| Qwen3-1.7B | 15.55 | 15.23 | -2.05% | 100% | 100% |
+<!-- END GENERATED: m5_vllm_quality -->
+
+Cheaper formats are only safe with the right grid. Qwen3's keys carry huge outlier channels, so a per-token
+integer cache loses the needle while KIVI-style per-channel keys keep it:
+
+![Needle-in-a-haystack per KV policy](results/figures/m5_needle.png)
+
+<!-- BEGIN GENERATED: caption-m5_needle -->
+*Every policy keeps the needle except INT4, per token (0%), INT4, rotated keys (51%), INT2 KIVI (48%), StreamingLLM, 1,024 kept (32%).*
+<!-- END GENERATED: caption-m5_needle -->
+
+What M5 found:
+- **Measure the kernel, not just the format.** Half of FP8 KV's gain on a busy server came from the attention
+  kernel it switches to. A BF16 control on that kernel separated the two.
+- **KL can't see eviction.** StreamingLLM barely moved KL on 2k-token text and lost most needles at long
+  context.
+- **Prefix caching helps everyone, not just the cached request.** Shorter prefills stop stalling other
+  sequences' decode steps. vLLM's block hashing reused nearly all that a reference radix tree says is
+  reusable.
+
+Details are in the [M5 learning doc](docs/learning/M5-kv-cache.md) and the [gate report](docs/gates/M5-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -219,7 +263,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | M2 | Baselines: vLLM benchmarks + quality harness | ✅ Done |
 | M3 | Quantization from scratch (RTN, GPTQ, AWQ, rotation, INT8/FP8) | ✅ Done |
 | M4 | Quantization in production: format crossover vs batch size | ✅ Done |
-| M5 | KV-cache quantization and prefix caching | 🚧 In progress |
+| M5 | KV-cache quantization and prefix caching | 🔍 Gate review |
 | M6 | Speculative decoding, proven lossless | ⏳ |
 | M7 | Custom Triton kernels | ⏳ |
 | M8 | Full-stack ablation across model sizes, performance model | ⏳ |
