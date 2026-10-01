@@ -261,7 +261,7 @@ def kv_serving_table(m5: Records, dollars_per_hour: float = 0.80) -> str:
                 [
                     model.split("/")[-1],
                     KV_LABELS[label],
-                    s.get("attention_backend") or DASH,
+                    (s.get("attention_backend") or DASH).removeprefix("AttentionBackendEnum."),
                     _f(s.get("kv_cache_tokens"), 0),
                     _f(cap["running"], 0) if cap else DASH,
                     _f(cap["output_tok_s"], 0) if cap else DASH,
