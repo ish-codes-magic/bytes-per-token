@@ -1,0 +1,73 @@
+# M6: speculative decoding. Run: uv run --only-group local modal run infra/modal_app.py::m6
+# Reference side (nanoserve): is it lossless, and how often would each drafter be right? Production side
+# (vLLM): what does that buy, per task and per batch size, and what does it cost when the server is busy?
+
+# ---- reference: nanoserve (read by experiments/m6.run_task) ----------------------------------------------
+reference:
+  target: Qwen/Qwen3-1.7B
+  draft: Qwen/Qwen3-0.6B                          # same tokenizer, ~1/3 of the weights
+  tasks: [chat, code, math, summarize]
+  prompts_per_task: 16
+  max_new_tokens: 192
+  ks: [1, 2, 3, 4, 5, 6, 7, 8]                    # draft lengths replayed from one pass
+  batch: 16
+  highlight_k: 4
+drafters:
+  small: {}                                       # Qwen3-0.6B, BF16
+  small-awq: {compressed: /cache/m4/Qwen3-0.6B-awq}   # M4's INT4 drafter: cheaper per step, less accurate?
+  ngram: {ngram: true, max_n: 4, min_n: 2}        # prompt lookup: no model at all
+tasks:                                            # one container each
+  agree_bf16: {kind: agreement, drafts: [small, small-awq, ngram], highlight: [small, ngram]}
+  # The interaction experiment: does quantizing the TARGET make the same drafter's guesses wrong more often?
+  agree_fp8: {kind: agreement, drafts: [small],
+              target: {name: fp8, compressed: /cache/m4/Qwen3-1.7B-fp8, format: fp8, act: token}}
+  agree_awq: {kind: agreement, drafts: [small], target: {name: awq, compressed: /cache/m4/Qwen3-1.7B-awq}}
+  loop: {kind: loop, draft: small, k: 4, prompts_per_task: 2, max_new_tokens: 96}
+  lossless: {kind: lossless, draft: small, k: 3, samples: 1000, tokens: 4}
+  timing: {kind: timing, draft: small}
+
+# ---- production: vLLM (read by experiments/m2.run_serving) ---------------------------------------------
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80
+slo: {ttft_ms: 500, tpot_ms: 50}
+seed: 0
+servers:                                          # labels: <target>-<method>[-k<draft length>]
+  - {name: bf16-none, label: bf16-none, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching]}
+  - {name: bf16-draft-k1, label: bf16-draft-k1, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 1}}
+  - {name: bf16-draft-k3, label: bf16-draft-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 3}}
+  - {name: bf16-draft-k5, label: bf16-draft-k5, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 5}}
+  - {name: bf16-draftawq-k3, label: bf16-draftawq-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: /cache/m4/Qwen3-0.6B-awq, num_speculative_tokens: 3}}
+  - {name: bf16-ngram-k3, label: bf16-ngram-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: ngram, num_speculative_tokens: 3, prompt_lookup_max: 4, prompt_lookup_min: 2}}
+  - {name: bf16-ngram-k6, label: bf16-ngram-k6, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: ngram, num_speculative_tokens: 6, prompt_lookup_max: 4, prompt_lookup_min: 2}}
+  - {name: bf16-eagle3-k3, label: bf16-eagle3-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
+     speculative: {method: eagle3, model: AngelSlim/Qwen3-1.7B_eagle3, num_speculative_tokens: 3}}
+  # The interaction experiment in production: the same drafter against M4's quantized targets
+  - {name: fp8-none, label: fp8-none, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+     args: [--no-enable-prefix-caching]}
+  - {name: fp8-draft-k3, label: fp8-draft-k3, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+     args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 3}}
+  - {name: awq-none, label: awq-none, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-awq,
+     args: [--no-enable-prefix-caching]}
+  - {name: awq-draft-k3, label: awq-draft-k3, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-awq,
+     args: [--no-enable-prefix-caching],
+     speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 3}}
+loads:
+  spec_chat:                                      # one user per task: where does drafting work?
+    - {mode: closed, concurrency: 1}
+  spec_code:
+    - {mode: closed, concurrency: 1}
+  spec_math:
+    - {mode: closed, concurrency: 1}
+  spec_summarize:
+    - {mode: closed, concurrency: 1}
+  spec_mixed:                                     # more users: does the gain survive a busy server?
+    - {mode: closed, concurrency: 4, requests: 48}
+    - {mode: closed, concurrency: 16, requests: 96}
+    - {mode: closed, concurrency: 64, requests: 192}

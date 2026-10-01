@@ -54,3 +54,10 @@ multi_turn:              # chat apps: 4 system prompts, 32 conversations of 4 tu
   output_len: 64
   num_requests: 128
   seed: 1                # seed 0 would reuse shared_prefix's prefix tokens: a false cross-workload cache hit
+
+# M6: real prompts (fastserve.quality.prompts). Outputs end where the model ends them, capped at output_len.
+spec_chat: {tasks: [chat], prompts_per_task: 8, output_len: 192}
+spec_code: {tasks: [code], prompts_per_task: 8, output_len: 192}
+spec_math: {tasks: [math], prompts_per_task: 8, output_len: 192}
+spec_summarize: {tasks: [summarize], prompts_per_task: 8, output_len: 192}
+spec_mixed: {tasks: [chat, code, math, summarize], prompts_per_task: 48, output_len: 192}

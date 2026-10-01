@@ -265,6 +265,22 @@ def m5_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     return to_plain(run_task(task, config, run_id=run_id, git=git, config_path=config_path))
 
 
+@app.function(gpu=GPU, cpu=4, memory=32768, timeout=90 * 60, volumes={CACHE: hf_cache})
+def m6_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """One section of the M6 config's nanoserve tasks (agreement, loop check, losslessness, timing)."""
+    import yaml
+
+    hf_cache.reload()
+
+    from fastserve.experiments.m6 import run_task
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    records = run_task(task, config, run_id=run_id, git=git, config_path=config_path)
+    hf_cache.commit()  # the prompt datasets, for the next container
+    return to_plain(records)
+
+
 @app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
 def m5_vllm_quality(kind: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """vLLM with an FP8 KV cache: the needle grid ("needle") or WikiText-2 perplexity ("perplexity")."""
@@ -1133,6 +1149,39 @@ def m5(
                     calls.append(
                         (f"vllm {kind} {model}", m5_vllm_quality.spawn(kind, model, config, run_id, git))
                     )
+    for what, call in calls:
+        try:
+            print(
+                f"{what}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}",
+                flush=True,
+            )
+        except Exception as err:  # keep what the other containers produced
+            print(f"{what} FAILED: {type(err).__name__}: {err}", flush=True)
+
+
+@app.local_entrypoint()
+def m6(config: str = "benchmarks/configs/m6_spec.yaml", steps: str = "tasks,serving", only: str = "") -> None:
+    """M6: nanoserve's speculative-decoding tasks and vLLM's servers, each in its own container.
+
+    `--only` (comma-separated) picks task names and server names, e.g. `--only loop,bf16-draft-k3`.
+    """
+    from fastserve.results import append_jsonl, git_info, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    cfg = load_config.remote(config)
+    wanted, picked = set(steps.split(",")), set(only.split(",")) if only else None
+    run_id, out = new_run_id(), REPO / "results" / "raw" / "m6_spec.jsonl"
+    calls: list[tuple[str, object]] = []
+    if "tasks" in wanted:
+        for task in cfg["tasks"]:
+            if picked is None or task in picked:
+                calls.append((task, m6_task.spawn(task, config, run_id, git)))
+    if "serving" in wanted:
+        for server in cfg["servers"]:
+            if picked is None or server["name"] in picked:
+                calls.append((f"serving {server['name']}", m2_run.spawn(config, git, [server["name"]])))
     for what, call in calls:
         try:
             print(
