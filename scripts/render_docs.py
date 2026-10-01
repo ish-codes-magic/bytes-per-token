@@ -110,6 +110,7 @@ def m6_blocks(m6: list) -> dict[str, str]:
         "m6_one_user": m6_report.one_user_table(m6),
         "m6_batch": m6_report.batch_table(m6),
         "m6_interaction": m6_report.interaction_table(m6),
+        "m6_round_costs": m6_report.round_cost_table(m6),
     }
 
 

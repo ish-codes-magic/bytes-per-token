@@ -11,6 +11,7 @@ from fastserve.report.m6 import (
     m6_observables,
     one_user_table,
     parse_label,
+    round_cost_table,
     step_table,
 )
 
@@ -48,7 +49,11 @@ def test_tables(m6_records):
     agreement = agreement_table(m6_records)
     assert "| Qwen3-0.6B | Code | 70.0% | 80.0% | 60.0% | 1.70 |" in agreement
     assert "| N-gram lookup | All tasks | — | — | — | 1.20 |" in agreement
-    assert "| Chat | 1,000 | 50 | 45 | 85 | 0.200 | 0.200 |" in lossless_table(m6_records)
+    assert "| BF16 | Chat | — | — | — | 50 | 85 | 0.200 | 0.200 |" in lossless_table(m6_records)
+    # every request decodes 99 tokens in 0.9 s (9.1 ms per step); 100 passes per load take 3.6 s (36 ms each)
+    costs = round_cost_table(m6_records)
+    assert "| BF16 | Qwen3-0.6B drafter, k = 3 | 9.1 | 36.0 | 9.0 | 0.99 | 3.96 | 1.20× |" in costs
+    assert "N-gram" not in costs and "No speculation" not in costs
     steps = step_table(m6_records)
     assert "| 4 | 22.00 | 1.10× |" in steps and "| drafter, 1 token | 10.00 | 0.50× |" in steps
     one_user = one_user_table(m6_records)
@@ -57,8 +62,8 @@ def test_tables(m6_records):
     )
     assert "| No speculation | 1.00× |" in one_user
     batch = batch_table(m6_records)
-    assert "| No speculation | 1.00× | 400 tok/s | 1,600 tok/s | 6,400 tok/s |" in batch
-    assert "| EAGLE-3 head, k = 3 | 1.80× | 1.62× | 1.26× | 0.90× |" in batch
+    assert "| No speculation | — | 1.00× | 400 tok/s | 1,600 tok/s | 6,400 tok/s |" in batch
+    assert "| EAGLE-3 head, k = 3 | — | 1.80× | 1.62× | 1.26× | 0.90× |" in batch
     interaction = interaction_table(m6_records)
     assert "| INT4 W4A16 (AWQ) | 54.0% |" in interaction and "| 1.20× |" in interaction
     loop = loop_table(m6_records)

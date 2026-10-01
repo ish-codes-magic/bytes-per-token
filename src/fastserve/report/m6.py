@@ -6,6 +6,7 @@ Records come from results/raw/m6_spec.jsonl. vLLM servers are labeled `<target>-
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from fastserve.report.tables import markdown_table
@@ -184,8 +185,7 @@ def m6_observables(m6: Records) -> dict[str, float | None]:
     code, chat = agree_rate(m6, "bf16", "small", "code"), agree_rate(m6, "bf16", "small", "chat")
     target_times = (_one(m6, "m6_step_times", role="target") or {}).get("ms") or {}
     loop = loop_check(m6, "bfloat16")
-    lossless = _newest(m6, "m6_lossless")
-    newest = {m["task"]: m for m in lossless}.values()  # the latest run per prompt
+    newest = lossless_runs(m6, "bfloat16")  # the latest BF16 run per prompt, as the predictions were written
     replay = (all_small or {}).get("by_k", {}).get("3", {}).get("acceptance_rate")
     vllm = vllm_acceptance(m6, "bf16-draft-k3", ONE_USER)
     return {
@@ -258,31 +258,48 @@ def agreement_table(m6: Records, target: str = "bf16", ks: tuple[int, ...] = (1,
     return markdown_table([*headers, *(f"Tokens per pass, k = {k}" for k in ks)], rows)
 
 
+DTYPES = (("bfloat16", "BF16"), ("float32", "float32 (control)"))
+
+
+def lossless_runs(m6: Records, dtype: str) -> list[dict[str, Any]]:
+    """The newest losslessness run per prompt in one dtype (older records, without a dtype, were BF16)."""
+    found = {m["task"]: m for m in _newest(m6, "m6_lossless") if m.get("dtype", "bfloat16") == dtype}
+    return [found[t] for t in TASKS if t in found]
+
+
 def lossless_table(m6: Records) -> str:
-    """Temperature 1 on the real models: chi-square on the first token, and TV on the whole sampled prefix."""
+    """Temperature 1 on the real models, in BF16 and float32.
+
+    Chi-square on the first token against each sampler's own pass and against the reference pass, how far
+    apart those passes put the distribution (no sampling involved), and TV on the whole sampled prefix.
+    """
     rows, length = [], 0
-    for m in {m["task"]: m for m in _newest(m6, "m6_lossless")}.values():
-        length = len(m["prefixes"])
-        last = m["prefixes"][-1]
-        rows.append(
-            [
-                TASK_LABELS[m["task"]],
-                _f(m["samples"], 0),
-                _f(m["chi_square"], 0),
-                _f(m["chi_square_plain"], 0),
-                _f(m["limit"], 0),
-                _f(last["tv_spec_vs_plain"], 3),
-                _f(last["tv_plain_vs_plain"], 3),
-            ]
-        )
+    for dtype, name in DTYPES:
+        for m in lossless_runs(m6, dtype):
+            length, last, paths = len(m["prefixes"]), m["prefixes"][-1], m.get("path_tv") or {}
+            rows.append(
+                [
+                    name,
+                    TASK_LABELS[m["task"]],
+                    _f(paths.get("speculative_vs_plain"), 3),
+                    _f(m.get("chi_square_own"), 0),
+                    _f(m.get("chi_square_plain_own"), 0),
+                    _f(m["chi_square"], 0),
+                    _f(m["limit"], 0),
+                    _f(last["tv_spec_vs_plain"], 3),
+                    _f(last["tv_plain_vs_plain"], 3),
+                ]
+            )
     headers = [
+        "Arithmetic",
         "Prompt",
-        "Samples",
-        "χ², speculative",
-        "χ², plain sampling",
+        "TV between the two samplers' passes",
+        "χ², speculative vs its own pass",
+        "χ², plain vs its own pass",
+        "χ², speculative vs the reference pass",
         "5σ limit",
-        f"TV over {length} tokens, speculative vs plain",
-        "TV, plain vs plain",
+        f"TV over {length} tokens, speculative vs plain samples",
+        "TV, plain vs plain samples",
     ]
     return markdown_table(headers, rows)
 
@@ -327,14 +344,20 @@ def one_user_table(m6: Records) -> str:
         *(TASK_LABELS[t] for t in TASKS),
         "Mean",
         "Draft tokens accepted",
-        "Tokens per target pass",
+        "Tokens per drafted pass",
         "Outputs identical to no speculation",
     ]
     return markdown_table(headers, rows)
 
 
+def kv_tokens(m6: Records, label: str) -> int | None:
+    start = _one(m6, "server_start", label=label)
+    return start.get("kv_cache_tokens") if start else None
+
+
 def batch_table(m6: Records) -> str:
-    """vLLM, mixed tasks: tokens/s without speculation, and each method's speedup, as users are added."""
+    """vLLM, mixed tasks: tokens/s without speculation, and each method's speedup, as users are added;
+    and what each method leaves of the KV cache (a draft model needs weights and a KV cache of its own)."""
     labels = {m["server"] for m in _newest(m6, "serving") if m["server"].startswith("bf16-")}
     rows = []
     for label in sorted(
@@ -343,11 +366,12 @@ def batch_table(m6: Records) -> str:
         _, method, k = parse_label(label)
         if method == "none":
             cells = [_f(tok_s(m6, label, "spec_mixed", u), 0) + " tok/s" for u in USERS]
-            rows.append([server_label(method, k), _f(1.0, 2, "×"), *cells])
+            rows.append([server_label(method, k), _f(kv_tokens(m6, label), 0), _f(1.0, 2, "×"), *cells])
         else:
             cells = [_f(speedup(m6, label, "spec_mixed", u), 2, "×") for u in USERS]
-            rows.append([server_label(method, k), _f(one_user_speedup(m6, label), 2, "×"), *cells])
-    return markdown_table(["Method", "1 user", *(f"{u} users" for u in USERS)], rows)
+            one = _f(one_user_speedup(m6, label), 2, "×")
+            rows.append([server_label(method, k), _f(kv_tokens(m6, label), 0), one, *cells])
+    return markdown_table(["Method", "KV cache (tokens)", "1 user", *(f"{u} users" for u in USERS)], rows)
 
 
 def interaction_table(m6: Records) -> str:
@@ -409,5 +433,81 @@ def loop_table(m6: Records) -> str:
         "Rounds identical to the replay",
         "Tokens per pass, real loop",
         "Tokens per pass, replay",
+    ]
+    return markdown_table(headers, rows)
+
+
+def _decode_seconds(m: dict[str, Any]) -> tuple[float, int]:
+    """(seconds spent decoding, tokens after the first) summed over a load's requests."""
+    cols = {c: i for i, c in enumerate(m["requests"]["columns"])}
+    rows = m["requests"]["rows"]
+    seconds = sum(r[cols["finished"]] - r[cols["first_token"]] for r in rows)
+    return seconds, sum(r[cols["output_tokens"]] - 1 for r in rows)
+
+
+def round_costs(m6: Records, label: str) -> dict[str, float] | None:
+    """One user, all four tasks: what a target pass costs with a drafter, against a plain decode step.
+
+    ms per pass = decoding time ÷ vLLM's count of passes. Subtracting one plain decode step (the same target
+    without speculation) leaves what speculation adds: the drafter's k steps, and whatever verifying k + 1
+    tokens costs beyond one step. Dividing by k gives an effective c, in plain target steps per drafted
+    token. Only for drafters that draft every pass (not n-gram lookup).
+    """
+    target, _, k = parse_label(label)
+    total: Counter[str] = Counter()
+    for workload in ONE_USER:
+        run, base = serving(m6, label, workload), serving(m6, f"{target}-none", workload)
+        counts = counters(m6, label, workload)
+        if not run or not base or not counts:
+            return None
+        seconds, tokens = _decode_seconds(run)
+        base_seconds, base_tokens = _decode_seconds(base)
+        total.update(seconds=seconds, tokens=tokens, base_seconds=base_seconds, base_tokens=base_tokens)
+        total.update(passes=counts["spec_drafts"])
+    if not total["passes"] or not total["base_tokens"] or not k:
+        return None
+    step_ms = 1e3 * total["base_seconds"] / total["base_tokens"]
+    pass_ms = 1e3 * total["seconds"] / total["passes"]
+    return {
+        "step_ms": step_ms,
+        "pass_ms": pass_ms,
+        "draft_token_ms": (pass_ms - step_ms) / k,
+        "c": (pass_ms - step_ms) / k / step_ms,
+        "tokens_per_pass": total["tokens"] / total["passes"],
+    }
+
+
+def round_cost_table(m6: Records) -> str:
+    """Why each drafter gives the speedup it does: tokens per pass against what a pass costs."""
+    labels = sorted(
+        {m["server"] for m in _newest(m6, "serving")}, key=lambda x: (parse_label(x)[0] != "bf16", x)
+    )
+    rows = []
+    for label in labels:
+        target, method, k = parse_label(label)
+        costs = round_costs(m6, label) if method not in ("none", "ngram") else None
+        if not costs:
+            continue
+        rows.append(
+            [
+                TARGET_LABELS[target],
+                server_label(method, k),
+                _f(costs["step_ms"], 1),
+                _f(costs["pass_ms"], 1),
+                _f(costs["draft_token_ms"], 1),
+                _f(costs["c"]),
+                _f(costs["tokens_per_pass"]),
+                _f(one_user_speedup(m6, label), 2, "×"),
+            ]
+        )
+    headers = [
+        "Target",
+        "Drafter",
+        "Plain decode step (ms)",
+        "Target pass with drafting (ms)",
+        "Added per drafted token (ms)",
+        "Effective c (÷ plain step)",
+        "Tokens per pass",
+        "Measured speedup",
     ]
     return markdown_table(headers, rows)
