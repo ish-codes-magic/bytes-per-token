@@ -56,12 +56,12 @@
 | Qwen3-0.6B | FP8 W8A8 | 0.021 | 40.4 | 46.5 | 20.1 |
 | Qwen3-0.6B | INT8 W8A8 | 0.017 | 40.5 | 47.9 | 18.9 |
 | Qwen3-0.6B | INT4 W4A16 (GPTQ) | 0.312 | 12.8 | 43.2 | 12.2 |
-| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.227 | 20.6 | 42.5 | 12.2 |
+| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.232 | 20.6 | 42.5 | 12.2 |
 | Qwen3-1.7B | BF16 | 0.000 | 69.0 | 62.8 | 40.2 |
 | Qwen3-1.7B | FP8 W8A8 | 0.020 | 67.4 | 62.0 | 36.6 |
 | Qwen3-1.7B | INT8 W8A8 | 0.028 | 67.4 | 61.7 | 38.4 |
 | Qwen3-1.7B | INT4 W4A16 (GPTQ) | 0.162 | 47.2 | 57.6 | 12.8 |
-| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.183 | 55.4 | 58.9 | 21.3 |
+| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.186 | 55.4 | 58.9 | 21.3 |
 <!-- END GENERATED: m4_quality -->
 
 ## Predicted vs measured
@@ -89,7 +89,7 @@
 | GSM8K change, INT4 GPTQ vs BF16, Qwen3-0.6B (points) | -15 – -3 | -28.9 | below range |
 | GSM8K change, INT4 GPTQ vs BF16, Qwen3-1.7B (points) | -10 – -1 | -21.8 | below range |
 | KL ratio, llm-compressor FP8 / our M3 FP8 W8A8, Qwen3-0.6B (x) | 0.8 – 1.25 | 1.02 | within range |
-| KL, llm-compressor INT8 W8A8 (SmoothQuant + GPTQ), Qwen3-0.6B | 0.005 – 0.03 | 0.0168 | within range |
+| KL, llm-compressor INT8 W8A8 (SmoothQuant + GPTQ), Qwen3-0.6B | 0.005 – 0.03 | 0.0167 | within range |
 <!-- END GENERATED: m4_predictions -->
 
 Batch-1 TPOT from bytes alone, with the fixed overhead fitted on BF16:
@@ -136,8 +136,11 @@ Batch-1 TPOT from bytes alone, with the fixed overhead fitted on BF16:
 - **My own crossover math was loose.** Section 2 of the learning doc treated B* ≈ 56 (where INT4's matmuls turn
   compute-bound) as the crossover. For the linear layers alone, INT4 stays ahead until batch ≈ 109, where its
   16-bit math time equals FP8's streaming time. The measured flip is between batch 64 and 256.
-- **The kernels are faithful.** vLLM's perplexity matches nanoserve's simulation of the same rounded weights
-  to about a percent, so M3's fake-quantization results carry over to production.
+- **The kernels are faithful, once we compare against the right copy.** vLLM's perplexity matches nanoserve's
+  simulation of the stored weights closely for every format. A first comparison used llm-compressor's dense
+  export, which rounds a few INT8 and AWQ weights differently from the codes it stores. Our own checkpoint
+  reader ([`quant/compressed.py`](../../src/fastserve/quant/compressed.py)) found it, and the KL was
+  re-measured on the stored codes.
 - **Freed weight memory only partly reaches the KV cache.** vLLM reserves more non-KV memory for quantized
   formats. Cause not identified yet.
 - **Dead end: AWQ out of GPU memory.** llm-compressor's AWQ caches every module's calibration inputs on the GPU.

@@ -138,12 +138,12 @@ task suite):
 | Qwen3-0.6B | FP8 W8A8 | 0.021 | 40.4 | 46.5 | 20.1 |
 | Qwen3-0.6B | INT8 W8A8 | 0.017 | 40.5 | 47.9 | 18.9 |
 | Qwen3-0.6B | INT4 W4A16 (GPTQ) | 0.312 | 12.8 | 43.2 | 12.2 |
-| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.227 | 20.6 | 42.5 | 12.2 |
+| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.232 | 20.6 | 42.5 | 12.2 |
 | Qwen3-1.7B | BF16 | 0.000 | 69.0 | 62.8 | 40.2 |
 | Qwen3-1.7B | FP8 W8A8 | 0.020 | 67.4 | 62.0 | 36.6 |
 | Qwen3-1.7B | INT8 W8A8 | 0.028 | 67.4 | 61.7 | 38.4 |
 | Qwen3-1.7B | INT4 W4A16 (GPTQ) | 0.162 | 47.2 | 57.6 | 12.8 |
-| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.183 | 55.4 | 58.9 | 21.3 |
+| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.186 | 55.4 | 58.9 | 21.3 |
 <!-- END GENERATED: m4_quality -->
 
 8-bit formats stay within a few points of BF16. INT4 costs real accuracy on multi-step generation at these sizes.

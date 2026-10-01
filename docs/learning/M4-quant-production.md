@@ -134,7 +134,7 @@ chat TPOT, whose excess over pure streaming is a fixed overhead that no format r
 | GSM8K change, INT4 GPTQ vs BF16, Qwen3-0.6B (points) | -15 – -3 | -28.9 | below range |
 | GSM8K change, INT4 GPTQ vs BF16, Qwen3-1.7B (points) | -10 – -1 | -21.8 | below range |
 | KL ratio, llm-compressor FP8 / our M3 FP8 W8A8, Qwen3-0.6B (x) | 0.8 – 1.25 | 1.02 | within range |
-| KL, llm-compressor INT8 W8A8 (SmoothQuant + GPTQ), Qwen3-0.6B | 0.005 – 0.03 | 0.0168 | within range |
+| KL, llm-compressor INT8 W8A8 (SmoothQuant + GPTQ), Qwen3-0.6B | 0.005 – 0.03 | 0.0167 | within range |
 <!-- END GENERATED: m4_predictions -->
 
 Every speed, memory and KL prediction landed in range. The misses are INT4's GSM8K drops, both far worse than
@@ -282,12 +282,12 @@ log only reports totals). It's an open question for M5, where KV capacity is the
 | Qwen3-0.6B | FP8 W8A8 | 0.021 | 40.4 | 46.5 | 20.1 |
 | Qwen3-0.6B | INT8 W8A8 | 0.017 | 40.5 | 47.9 | 18.9 |
 | Qwen3-0.6B | INT4 W4A16 (GPTQ) | 0.312 | 12.8 | 43.2 | 12.2 |
-| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.227 | 20.6 | 42.5 | 12.2 |
+| Qwen3-0.6B | INT4 W4A16 (AWQ) | 0.232 | 20.6 | 42.5 | 12.2 |
 | Qwen3-1.7B | BF16 | 0.000 | 69.0 | 62.8 | 40.2 |
 | Qwen3-1.7B | FP8 W8A8 | 0.020 | 67.4 | 62.0 | 36.6 |
 | Qwen3-1.7B | INT8 W8A8 | 0.028 | 67.4 | 61.7 | 38.4 |
 | Qwen3-1.7B | INT4 W4A16 (GPTQ) | 0.162 | 47.2 | 57.6 | 12.8 |
-| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.183 | 55.4 | 58.9 | 21.3 |
+| Qwen3-1.7B | INT4 W4A16 (AWQ) | 0.186 | 55.4 | 58.9 | 21.3 |
 <!-- END GENERATED: m4_quality -->
 
 - **8-bit formats are close to free.** FP8 and INT8 W8A8 stay within a few points of BF16 on every task, far
@@ -306,18 +306,41 @@ compared with nanoserve's perplexity on the checkpoint's rounded weights, simula
 |---|---|---|---|---|
 | Qwen3-0.6B | BF16 | 19.56 | 19.54 | -0.1% |
 | Qwen3-0.6B | FP8 W8A8 | 19.84 | 19.85 | 0.0% |
-| Qwen3-0.6B | INT8 W8A8 | 19.71 | 19.69 | -0.1% |
+| Qwen3-0.6B | INT8 W8A8 | 19.68 | 19.69 | 0.0% |
 | Qwen3-0.6B | INT4 W4A16 (GPTQ) | 25.37 | 25.33 | -0.2% |
-| Qwen3-0.6B | INT4 W4A16 (AWQ) | 22.66 | 22.86 | 0.9% |
+| Qwen3-0.6B | INT4 W4A16 (AWQ) | 22.87 | 22.86 | -0.0% |
 | Qwen3-1.7B | BF16 | 15.59 | 15.55 | -0.2% |
 | Qwen3-1.7B | FP8 W8A8 | 15.58 | 15.56 | -0.1% |
-| Qwen3-1.7B | INT8 W8A8 | 15.29 | 15.31 | 0.1% |
+| Qwen3-1.7B | INT8 W8A8 | 15.28 | 15.31 | 0.2% |
 | Qwen3-1.7B | INT4 W4A16 (GPTQ) | 18.08 | 18.12 | 0.2% |
-| Qwen3-1.7B | INT4 W4A16 (AWQ) | 17.00 | 17.12 | 0.7% |
+| Qwen3-1.7B | INT4 W4A16 (AWQ) | 17.10 | 17.12 | 0.1% |
 <!-- END GENERATED: m4_fidelity -->
 
-They agree to within about a percent for every format. So the kernels are faithful: every quality loss above is
-the quantization's. That also means M3's fake-quantization results carry over to production.
+They agree closely for every format. So the kernels are faithful: every quality loss above is the quantization's.
+That also means M3's fake-quantization results carry over to production.
+
+Getting this table right took one correction. Its first version loaded llm-compressor's own *dense export* of each
+checkpoint, and AWQ came out visibly worse than in vLLM. Our own reader of the compressed files
+([`quant/compressed.py`](../../src/fastserve/quant/compressed.py)) settled it. FP8 and GPTQ match the export
+exactly, but INT8 and AWQ don't:
+
+<!-- BEGIN GENERATED: m4_reader_check -->
+| Model | Format | Tensors identical | Weights that differ (first differing layer) | Largest difference (grid steps) |
+|---|---|---|---|---|
+| Qwen3-0.6B | FP8 W8A8 | 310 / 310 | — | — |
+| Qwen3-0.6B | INT8 W8A8 | 114 / 310 | 0.16% | 0.94 |
+| Qwen3-0.6B | INT4 W4A16 (GPTQ) | 310 / 310 | — | — |
+| Qwen3-0.6B | INT4 W4A16 (AWQ) | 114 / 310 | 0.60% | 1.03 |
+| Qwen3-1.7B | FP8 W8A8 | 310 / 310 | — | — |
+| Qwen3-1.7B | INT8 W8A8 | 114 / 310 | 0.02% | 0.95 |
+| Qwen3-1.7B | INT4 W4A16 (GPTQ) | 310 / 310 | — | — |
+| Qwen3-1.7B | INT4 W4A16 (AWQ) | 114 / 310 | 0.61% | 1.03 |
+<!-- END GENERATED: m4_reader_check -->
+
+In the two recipes that rescale weights before rounding (SmoothQuant, AWQ), the export rounds a small fraction of
+weights one grid step differently from the integer codes the checkpoint stores. vLLM serves the stored codes.
+With nanoserve reading those codes too, the AWQ gap disappeared. The lesson: **compare against what is actually
+served**, not against a convenient copy of it.
 
 ### Why INT4 fails GSM8K
 
