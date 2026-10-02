@@ -215,6 +215,7 @@ def m8_blocks(
             "m8_host_chain": m8_report.host_chain_table(m8),
             "m8_plan_cost": m8_report.plan_cost_table(m8),
             "m8_busy_steps": m8_report.busy_step_table(m8),
+            "m8_profile_difference": profile_difference(m8, "0.6b-wg", "0.6b-g"),
             "m8_profiles_large": m8_report.profile_table(m8, ["1.7b-s", "1.7b-sg", "1.7b-fs"]),
             "m8_profiles_small": m8_report.profile_table(m8, ["0.6b-w", "0.6b-g", "0.6b-wg"]),
             "m8_fallback_message": f"> {m8_report.fallback_message(m8, LARGE, 'ks')}",
@@ -258,6 +259,16 @@ def m8_blocks(
         for model, size in ((LARGE, "large"), (SMALL, "small")):
             blocks[f"m8_steps_{workload}_{size}"] = m8_report.step_table(m8, model, workload, price)
     return blocks
+
+
+def profile_difference(m8: list, first: str, second: str) -> str:
+    """Two profiled servers call by call (scripts/compare_profiles.py), for docs/open-questions.md."""
+    import compare_profiles
+
+    profiles = [m8_report.profile_of(m8, name) for name in (first, second)]
+    if None in profiles:
+        return f"*No profile of `{first}` or `{second}` yet.*"
+    return compare_profiles.table(*profiles, top=10)
 
 
 def compute_spend(path: Path) -> str:

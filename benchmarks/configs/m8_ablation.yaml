@@ -72,7 +72,7 @@ profile:
   max_tokens: 160
   delay_iterations: 8            # engine steps skipped after /start_profile (the prefill and first passes)
   iterations: 24                 # engine steps profiled
-  top: 40                        # rows kept per table
+  top: 150                       # rows kept per table (the six M8 profiles kept 40)
 
 # ---- quality of the lossy part of the stack, in vLLM: FP8 weights + FP8 KV (label wk) --------------------
 # Prefix caching does not change outputs, and speculative decoding is lossless in distribution (M6).
