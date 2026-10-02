@@ -51,6 +51,9 @@ loads:
     - {mode: closed, concurrency: 1}
 only_for: {long_32k: ladder}     # workloads that only the servers in this plan list run
 
+# ---- a worked question for the performance model (docs/07-performance-model.md) --------------------------
+example: {users: 500, context: 16384}   # "500 concurrent users with 16k-token contexts: what do you deploy?"
+
 # ---- what FlashInfer costs per pass, call by call (experiments/m8.py) -------------------------------------
 # Added after the controls: every server with FlashInfer and speculation takes ~25 ms per pass whatever the
 # model. A speculative pass takes FlashInfer's prefill path here; this times that path's calls directly.

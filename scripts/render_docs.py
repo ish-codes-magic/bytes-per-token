@@ -226,6 +226,20 @@ def m8_blocks(
     errors = fit.errors(kept, configs, hw, informed_cal)
     informed = (fit.median_abs(errors), sum(abs(e) <= 0.15 for e in errors) / len(errors)) if errors else None
     blocks["m8_findings"] = m8_report.findings(m8, frozen, earlier["m4"], m2_quality, informed)
+    kept_per_pass = frozen["expected_loads"]["spec_mixed"]["tokens_per_pass"]
+    example = config["example"]
+    blocks["m8_example"] = m8_report.example_table(
+        configs[LARGE],
+        hw,
+        informed_cal,
+        frozen["startup_memory"],
+        LARGE,
+        example["users"],
+        example["context"],
+        kept_per_pass,
+        m8_report.eagle_bytes(configs[LARGE], head),
+        price,
+    )
     for model, size in ((LARGE, "large"), (SMALL, "small")):
         perplexity = m8_report.perplexities(m8, earlier["m5"], earlier["m4"], model)
         blocks[f"m8_best_{size}"] = m8_report.best_table(m8, model, perplexity)
@@ -259,6 +273,17 @@ def compute_spend(path: Path) -> str:
     through = rows[-1]["billed_through_hour"].replace("T", " ")[:16]
     total = sum(by_resource.values())
     return f"Cloud compute so far: **${total:.2f}** on Modal ({parts}), billed through {through} UTC."
+
+
+def compute_spend_month(path: Path) -> str:
+    """The newest month in the compute log: what Modal has billed in it so far."""
+    import csv
+
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    month = max(row["date"][:7] for row in rows)
+    total = sum(float(row["usd"]) for row in rows if row["date"].startswith(month))
+    through = rows[-1]["billed_through_hour"].replace("T", " ")[:16]
+    return f"   **${total:.2f}** in {month}, billed through {through} UTC."
 
 
 def m3_blocks(m3: list) -> dict[str, str]:
@@ -394,6 +419,7 @@ def build_blocks() -> dict[str, str]:
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
+        blocks["compute_spend_month"] = compute_spend_month(spend)
     # Each figure's one-line takeaway, written by the figure code: <!-- BEGIN GENERATED: caption-<name> -->
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")

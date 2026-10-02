@@ -957,6 +957,8 @@ def m8_points(
 
     def stack_for(m: dict[str, Any]) -> Stack | None:
         on = letters(m["server"])
+        if "g" in on:
+            return None  # a forced graph mode is a control, not a stack the model describes
         kept = tokens_per_pass(m) if "s" in on else None
         if "s" in on and kept is None:
             return None
@@ -1661,6 +1663,87 @@ def findings(
         ),
     ]
     return "\n".join(lines)
+
+
+CANDIDATE_STACKS = {  # label → (weights, FP8 KV, speculation): what the model is asked to choose from
+    "base": ("bf16", False, False),
+    "w": ("fp8", False, False),
+    "wk": ("fp8", True, False),
+    "ws": ("fp8", False, True),
+    "wks": ("fp8", True, True),
+    "a": ("int4", False, False),
+    "ak": ("int4", True, False),
+    "as": ("int4", False, True),
+    "aks": ("int4", True, True),
+}
+
+
+def predict_candidates(
+    cfg: Any,
+    hw: Hardware,
+    cal: Calibration,
+    starts: dict[str, Any],
+    model: str,
+    users: float,
+    context: float,
+    kept: float,
+    draft_bytes: float,
+    output_len: float = 256,
+) -> dict[str, dict[str, float]]:
+    """The serving model's prediction for every candidate stack at one (users, context per request)."""
+    out = {}
+    for label, (weights, fp8_kv, spec) in CANDIDATE_STACKS.items():
+        stack = Stack(
+            weights=weights,
+            kv="fp8" if fp8_kv else "bf16",
+            backend=FLASHINFER if fp8_kv else FLASH_ATTN,
+            speculation=Speculation(3, kept, draft_bytes) if spec else None,
+        )
+        load = Load(users=users, prompt_len=context, output_len=output_len)
+        load = replace(load, kv_tokens=kv_capacity(model, stack, cfg, starts))
+        out[label] = predict(cfg, hw, stack, cal, load)
+    return out
+
+
+def example_table(
+    cfg: Any,
+    hw: Hardware,
+    cal: Calibration,
+    starts: dict[str, Any],
+    model: str,
+    users: int,
+    context: int,
+    kept: float,
+    draft_bytes: float,
+    dollars_per_hour: float,
+) -> str:
+    """A worked question: this many users with this much context each. What does the model say per stack?"""
+    predictions = predict_candidates(cfg, hw, cal, starts, model, users, context, kept, draft_bytes)
+    base = predictions[BASE]["tok_s"]
+    top = max(
+        (label for label in predictions if not label.startswith("a")), key=lambda x: predictions[x]["tok_s"]
+    )
+    rows = []
+    for label, got in predictions.items():
+        rows.append(
+            [
+                f"**`{label}`**" if label == top else f"`{label}`",
+                _f(got["batch"], 0),
+                _f(got["tok_s"], 0),
+                _f(got["tok_s"] / base, 2, "×"),
+                _f(got["tpot_ms"], 0),
+                _f(dollars(got["tok_s"], dollars_per_hour), 2),
+            ]
+        )
+    headers = [
+        "Stack",
+        "Sequences running at once",
+        "Tokens/s",
+        "vs stock",
+        "TPOT (ms)",
+        "$ per 1M tokens",
+    ]
+    return markdown_table(headers, rows)
 
 
 # ---- predictions -------------------------------------------------------------------------------------------

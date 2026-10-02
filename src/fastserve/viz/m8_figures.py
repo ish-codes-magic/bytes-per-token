@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import statistics
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,7 @@ import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
 
-from fastserve.perfmodel.serving import FLASHINFER, Calibration, Hardware, Load, Speculation, Stack, predict
+from fastserve.perfmodel.serving import Calibration, Hardware
 from fastserve.report import m8 as report
 from fastserve.report.m8 import (
     BASE,
@@ -266,17 +265,7 @@ def host_chain(m8: Records) -> tuple[plt.Figure, str]:
 
 # ---- 4. recommendation map ---------------------------------------------------------------------------------
 
-CANDIDATES = {  # label → (weights, FP8 KV, speculation)
-    "base": ("bf16", False, False),
-    "w": ("fp8", False, False),
-    "wk": ("fp8", True, False),
-    "ws": ("fp8", False, True),
-    "wks": ("fp8", True, True),
-    "a": ("int4", False, False),
-    "ak": ("int4", True, False),
-    "as": ("int4", False, True),
-    "aks": ("int4", True, True),
-}
+CANDIDATES = report.CANDIDATE_STACKS
 CANDIDATE_COLOR = {
     "base": BASELINE_GRAY,
     "w": "#9ecae1",
@@ -307,23 +296,12 @@ def best_stack(
     kept: float,
     draft_bytes: float,
     allowed: list[str],
-    output_len: int = 256,
 ) -> tuple[str, float]:
     """The candidate the serving model expects to give the most tokens/s for this many users and context."""
-    scores = {}
-    for label in allowed:
-        weights, fp8_kv, spec = CANDIDATES[label]
-        stack = Stack(
-            weights=weights,
-            kv="fp8" if fp8_kv else "bf16",
-            backend=FLASHINFER if fp8_kv else "flash_attn",
-            speculation=Speculation(3, kept, draft_bytes) if spec else None,
-        )
-        load = Load(users=users, prompt_len=context, output_len=output_len)
-        load = replace(load, kv_tokens=report.kv_capacity(model, stack, cfg, starts))
-        scores[label] = predict(cfg, hw, stack, cal, load)["tok_s"]
+    predictions = report.predict_candidates(cfg, hw, cal, starts, model, users, context, kept, draft_bytes)
+    scores = {label: predictions[label]["tok_s"] for label in allowed}
     winner = max(scores, key=scores.get)
-    return winner, scores[winner] / scores["base"]
+    return winner, scores[winner] / predictions[BASE]["tok_s"]
 
 
 def recommendation_map(
