@@ -136,9 +136,9 @@ def test_attention_at_max_context():
 def test_default_split_gives_small_batches_parallelism():
     from fastserve.kernels.kv_attention import default_split
 
-    assert default_split(1, 8, 32768) == 512  # 8 heads × 64 splits = 512 programs
-    assert default_split(64, 8, 32768) == 32768  # 512 programs already: one split each
-    assert default_split(1, 8, 100) == 256  # never below 8 key groups
+    assert default_split(1, 8, 32768) == 128  # 8 heads × 256 splits = 2,048 programs
+    assert default_split(64, 8, 8192) == 256  # 128 would be 32,768 programs: capped near 16,384
+    assert default_split(1, 8, 100) == 128  # never below 4 key groups
     assert all(default_split(b, 8, t) % 32 == 0 for b in (1, 3, 64) for t in (1, 1000, 30000))
 
 

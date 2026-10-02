@@ -230,6 +230,9 @@ def attention_case(
         entry = {"cache_bytes": nbytes, **extra, **_measure(fn, timing, flush=flush)}
         if "ms" in entry:
             entry["gbps"] = nbytes / (entry["ms"] / 1e3) / 1e9
+            # The same call without the flush. If its data fits in L2 and it gets no faster, memory was not
+            # what limited it.
+            entry["warm_ms"] = _measure(fn, timing).get("ms")
             got = fn().float().reshape(batch, hq, d)
             if exact is not None:  # how far from attention over the unquantized cache
                 entry["error_vs_bf16"] = ((got - exact).norm() / exact.norm()).item()

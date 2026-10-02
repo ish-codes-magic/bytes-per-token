@@ -175,13 +175,15 @@ def _kernel():
     return decode_attention_kernel
 
 
-def default_split(batch: int, kv_heads: int, tokens: int, group: int = 32, programs: int = 512) -> int:
-    """Tokens per program: enough splits for about `programs` programs in total, never below 8 key groups.
+def default_split(batch: int, kv_heads: int, tokens: int, group: int = 32, max_programs: int = 16384) -> int:
+    """Tokens per program: 4 key groups (128 tokens), or more once that would pass `max_programs` programs.
 
-    One split per (sequence, KV head) leaves a small batch with fewer programs than the GPU has SMs; too
-    many splits and each program's fixed costs (loading the query, writing a partial) outweigh its work.
+    Chosen from the tuning sweep (results/raw/m7_kernels.jsonl, `m7_tune`; docs/04-kernels.md), not derived:
+    on the L4, 64–256 tokens per program was within a few percent of the best at every shape tried, from
+    1 × 2,048 to 64 × 8,192 tokens. Many small programs keep more memory requests in flight than a few long
+    ones. Without splitting, one sequence would be 8 programs on a GPU with 58 SMs.
     """
-    per_program = max(tokens * batch * kv_heads // programs, 8 * group)
+    per_program = max(tokens * batch * kv_heads // max_programs, 4 * group)
     return max(group, 1 << (per_program.bit_length() - 1))  # round down to a power of two (a group multiple)
 
 
@@ -193,13 +195,15 @@ def decode_attention(
     *,
     tokens: int | None = None,
     split: int | None = None,
-    num_warps: int = 4,
+    num_warps: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Partial attentions of one query per head over a quantized cache, one per split.
 
     q [B, Hq, D] (any float dtype); lengths [B] int32. `tokens` is the longest sequence's length when the
     caller knows it (the cache does): the kernel then launches splits for that many tokens only, without
-    asking the GPU for `lengths.max()`. Returns (out [B, Hq, S, D], lse [B, Hq, S]) in float32;
+    asking the GPU for `lengths.max()`. One warp per program was the fastest setting at every shape in the
+    tuning sweep: a program's sums then stay inside one warp instead of going through shared memory.
+    Returns (out [B, Hq, S, D], lse [B, Hq, S]) in float32;
     `merge_partials` turns them into the attention output, possibly together with partials from elsewhere
     (the cache's full-precision tail).
     """
