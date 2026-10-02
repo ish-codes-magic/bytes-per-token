@@ -164,5 +164,21 @@ def test_speculation_pays_only_if_tokens_per_pass_beat_its_cost():
     assert time_per_token(CFG, HW, Stack(speculation=useless), cal, 2, 10) > plain
 
 
+def test_on_piecewise_graphs_a_pass_waits_for_the_slower_of_gpu_and_host():
+    spec = Speculation(k=3, tokens_per_pass=2.0, draft_bytes=100.0)
+    assert not Stack(speculation=spec).piecewise  # FlashAttention keeps the full graph with speculation
+    assert not Stack(backend=FLASHINFER).piecewise  # and FlashInfer keeps it without
+    collide = Stack(kv="fp8", backend=FLASHINFER, speculation=spec)
+    assert collide.piecewise
+    gpu_pass = 2.0 * time_per_token(CFG, HW, collide, PLAIN, batch=1, context=10)  # no host time modeled
+    slow_host = Calibration(host_step_s=10 * gpu_pass)
+    assert time_per_token(CFG, HW, collide, slow_host, 1, 10) == pytest.approx(10 * gpu_pass / 2.0)
+    fast_host = Calibration(host_step_s=gpu_pass / 10)  # the GPU is the slower one: nothing changes
+    assert time_per_token(CFG, HW, collide, fast_host, 1, 10) == pytest.approx(gpu_pass / 2.0)
+    # a stack that keeps its full graph never waits for the host
+    full = Stack(speculation=spec)
+    assert time_per_token(CFG, HW, full, slow_host, 1, 10) == time_per_token(CFG, HW, full, PLAIN, 1, 10)
+
+
 def test_cost():
     assert dollars_per_million(1_000, dollars_per_hour=0.8) == pytest.approx(0.8 / 3.6)

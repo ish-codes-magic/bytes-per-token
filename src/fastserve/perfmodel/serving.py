@@ -28,6 +28,10 @@ Speculative decoding replaces "time per token" with a pass that verifies k + 1 t
 (step with k + 1 tokens per sequence + k drafted tokens) / E. Prefix caching shrinks the uncached prompt.
 A smaller KV format shrinks the KV term and, when the cache is the limit, raises the batch.
 
+One term is not bytes or FLOPs. Where vLLM cannot replay a pass as one CUDA graph (`Stack.piecewise`), the
+host does work for every layer, beside the GPU, and a pass takes max(GPU time, host time). M8 found this by
+getting it wrong: the frozen calibration has no host time, the M8-informed one does (`host_step_s`).
+
 Stdlib only, so the laptop, the report and the dashboard can all run it.
 """
 
@@ -76,6 +80,16 @@ class Stack:
         if self.kv == "fp8" and self.backend != FLASHINFER:
             raise ValueError("an FP8 KV cache is served by FlashInfer here: set backend=FLASHINFER")
 
+    @property
+    def piecewise(self) -> bool:
+        """Does vLLM give up the full CUDA graph for this stack? (0.30, on a GPU older than Hopper.)
+
+        With FlashInfer, a speculative pass is planned as a prefill there, and a prefill cannot be captured
+        in one graph. vLLM then runs piecewise graphs: Python calls attention and launches a graph for every
+        layer, and the host, not the GPU, can become what a pass waits for (M8).
+        """
+        return self.backend == FLASHINFER and self.speculation is not None
+
 
 @dataclass(frozen=True)
 class Load:
@@ -107,6 +121,7 @@ class Calibration:
     draft_per_seq_s: float = 0.0  # per drafted token and sequence: sampling and acceptance
     kv_slack: float = 1.0  # cache tokens a running sequence holds ÷ (prompt + output)
     request_s: float = 0.0  # per request, before its prefill starts: HTTP, tokenizing, scheduling
+    host_step_s: float = 0.0  # what the host needs per pass on piecewise graphs; 0 = not modeled (M8)
 
 
 def linear_params(cfg: Any) -> int:
@@ -235,7 +250,10 @@ def time_per_token(
         return step_time(cfg, hw, stack, cal, batch, context, load=load)
     verify = step_time(cfg, hw, stack, cal, batch, context, new_tokens=spec.k + 1, load=load)
     draft = spec.k * (cal.draft_step_s + spec.draft_bytes / hw.bandwidth + cal.draft_per_seq_s * batch)
-    return (verify + draft) / spec.tokens_per_pass
+    gpu_pass = verify + draft
+    # On piecewise graphs the host works beside the GPU: a pass takes whichever of the two is slower.
+    pass_time = max(gpu_pass, cal.host_step_s) if stack.piecewise else gpu_pass
+    return pass_time / spec.tokens_per_pass
 
 
 def running_batch(load: Load, cal: Calibration) -> float:
