@@ -579,6 +579,42 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     from importlib.metadata import version
     from pathlib import Path
 
+    if topic == "ops":  # M7: the norm and quantization ops our kernels compete with, and vLLM's fusion pass
+        import vllm
+
+        root = Path(vllm.__file__).parent
+        source = (root / "_custom_ops.py").read_text(encoding="utf-8")
+        lines = [f"vllm {version('vllm')}, triton {version('triton')}, torch {version('torch')}"]
+        for name in re.findall(r"^def (\w*(?:norm|quant)\w*)\(", source, re.M):
+            start = source.index(f"def {name}(")
+            lines.append(source[start : start + 900].split("\n\n\n")[0])
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            hits = re.finditer(
+                r"^.*(RMSNormQuantFusion|enable_fusion|fuse_norm_quant|class .*Fusion.*Pass).*$", text, re.M
+            )
+            for match in list(hits)[:4]:
+                lines.append(f"{path.relative_to(root)}: {match.group(0).strip()[:170]}")
+        # Which quantization ops the norm+quant pass rewrites, and when the pass is switched on.
+        lines.append(
+            (root / "compilation/passes/fusion/rms_quant_fusion.py").read_text(encoding="utf-8")[:9000]
+        )
+        config = (root / "config/vllm.py").read_text(encoding="utf-8")
+        for match in re.finditer(r"enable_norm_fusion|fuse_act_quant|optimization_level", config):
+            lines.append(config[max(0, match.start() - 300) : match.start() + 500])
+        # What the attention kernel can be compared with, and what Triton offers for rounding.
+        import inspect
+
+        import flashinfer
+        from triton.language.extra import libdevice
+
+        lines.append(f"flashinfer {version('flashinfer-python')}")
+        for name in sorted(n for n in dir(flashinfer) if "decode" in n.lower()):
+            obj = getattr(flashinfer, name)
+            where = str(inspect.signature(obj)) if callable(obj) else type(obj).__name__
+            lines.append(f"flashinfer.{name}{where}")
+        lines.append("libdevice: " + ", ".join(n for n in dir(libdevice) if "int" in n or "round" in n))
+        return "\n".join(lines)
     if topic == "spec":  # M6: vLLM's speculative-decoding config and metrics; drafters published for Qwen3
         import vllm
         from huggingface_hub import HfApi
