@@ -15,6 +15,7 @@ techniques:                      # in ladder order
   p: {name: prefix caching, args: [--enable-prefix-caching], off_args: [--no-enable-prefix-caching]}
   s:
     name: speculative decoding (EAGLE-3 head, k = 3)
+    head: {layers: 1, draft_vocab_size: 32000}   # both heads' config.json: what a drafted token reads
     speculative:
       Qwen/Qwen3-1.7B: {method: eagle3, model: AngelSlim/Qwen3-1.7B_eagle3, num_speculative_tokens: 3}
       Qwen/Qwen3-0.6B: {method: eagle3, model: Nicolassuez/Qwen3-0.6B-eagle3, num_speculative_tokens: 3}
