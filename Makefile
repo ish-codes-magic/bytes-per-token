@@ -2,7 +2,7 @@
 # (No `make` on Windows? Run the commands after each target name directly.)
 MODAL := uv run --only-group local modal run infra/modal_app.py
 
-.PHONY: setup lint format test test-gpu probe bench-baseline quality-baseline bench-kernels bench-ablation figures docs
+.PHONY: setup lint format test test-gpu probe bench-baseline quality-baseline bench-kernels bench-ablation figures docs site reproduce-quick reproduce-all open-question
 
 setup:
 	uv sync --only-group local
@@ -46,3 +46,24 @@ figures:
 
 docs:
 	uv run --only-group local python scripts/render_docs.py
+
+site:  # the dashboard's data, from results/raw/ (the page itself is static: serve site/ over HTTP)
+	uv run --only-group local python scripts/build_site.py
+
+# Redraw every figure from the committed raw results and check each caption against the committed one, then
+# check that the tables in the docs and the dashboard's data are what those results give. No GPU, no Modal
+# account, about a minute. This is what CI's `reproduce-quick` job runs.
+reproduce-quick:
+	uv run --only-group quick python scripts/make_figures.py --out reproduced --check
+	uv run --only-group quick python scripts/render_docs.py
+	uv run --only-group quick python scripts/build_site.py --check
+	git diff --stat --exit-code -- README.md docs
+
+reproduce-all:  # every measurement again, in the cloud. Billed GPU time: read scripts/reproduce_all.sh first
+	bash scripts/reproduce_all.sh
+
+# The question M8 left open (docs/open-questions.md): why do FP8 weights double the host's time per step on
+# piecewise CUDA graphs? Two short profiles on the 1.7B model (a few minutes of L4 each), then their difference.
+open-question:
+	$(MODAL)::m8 --profile --only 1.7b-wg,1.7b-g
+	uv run --only-group local python scripts/compare_profiles.py 1.7b-wg 1.7b-g
