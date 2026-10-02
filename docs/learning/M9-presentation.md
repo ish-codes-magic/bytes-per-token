@@ -125,7 +125,7 @@ What is now checked, and how often:
 | What is checked | How many | By |
 |---|---|---|
 | Figures redrawn from the raw records, caption equal to the committed one | 52 | `make reproduce-quick`, in CI on every push |
-| Generated tables and captions placed in the README and docs | 319 | `scripts/render_docs.py`; CI fails if the committed docs differ |
+| Generated tables and captions placed in the README and docs | 325 | `scripts/render_docs.py`; CI fails if the committed docs differ |
 | Inputs on which the browser's model must equal the Python model | 192 | `site/tests/parity.mjs`, and the page itself on load |
 | Frozen predictions the calculator reproduces from a workload preset | 115 | `site/tests/logic.mjs` |
 | Recommendation-map cells equal to the ones Python computes | 126 | `site/tests/logic.mjs` |
