@@ -50,6 +50,17 @@ loads:
     - {mode: closed, concurrency: 1}
 only_for: {long_32k: ladder}     # workloads that only the servers in this plan list run
 
+# ---- what FlashInfer costs per pass, call by call (experiments/m8.py) -------------------------------------
+# Added after the controls: every server with FlashInfer and speculation takes ~25 ms per pass whatever the
+# model. A speculative pass takes FlashInfer's prefill path here; this times that path's calls directly.
+plan_cost:
+  model: Qwen/Qwen3-1.7B
+  batches: [1, 8, 64]
+  contexts: [600, 4096]
+  new_tokens: 4                  # k + 1: what a pass verifies with three drafted tokens
+  repeats: 200
+  warmup: 20
+
 # ---- quality of the lossy part of the stack, in vLLM: FP8 weights + FP8 KV (label wk) --------------------
 # Prefix caching does not change outputs, and speculative decoding is lossless in distribution (M6).
 # Baselines: BF16 (M2's suite and needle grid, M4's perplexity), FP8 weights (M4), FP8 KV (M5).

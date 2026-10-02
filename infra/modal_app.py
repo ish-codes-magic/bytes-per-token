@@ -383,6 +383,18 @@ def m8_quality(kind: str, model: str, config_path: str, run_id: str, git: dict) 
     return to_plain([record])
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=4, memory=16384, timeout=20 * 60)
+def m8_plan_cost(config_path: str, run_id: str, git: dict) -> list[dict]:
+    """FlashInfer's plan and attention calls, made and timed as vLLM makes them (experiments/m8.py)."""
+    import yaml
+
+    from fastserve.experiments.m8 import run_plan_cost
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    return to_plain(run_plan_cost(config, REMOTE, run_id=run_id, git=git, config_path=config_path))
+
+
 def _m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     import yaml
 
@@ -716,6 +728,14 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     from importlib.metadata import version
     from pathlib import Path
 
+    if topic.startswith(
+        "source:"
+    ):  # one file of an installed package, e.g. source:vllm/v1/attention/backend.py
+        import importlib
+
+        package, _, relative = topic.removeprefix("source:").partition("/")
+        root = Path(importlib.import_module(package).__file__).parent
+        return f"# {package}: {relative}\n" + (root / relative).read_text(encoding="utf-8")
     if topic == "cudagraph":  # M8: which attention backends vLLM can capture in a full CUDA graph, and when
         import vllm
 
@@ -1491,13 +1511,15 @@ def m8(
     check: bool = False,
     quality: str = "",
     graphs: bool = False,
+    plan: bool = False,
 ) -> None:
     """M8: every server of the ablation plan, one container each, results appended as they finish.
 
     `--only 1.7b-base,1.7b-wkps` picks servers by name. `--check` only verifies that the picked combinations
     start and answer one request (nothing is timed or recorded). `--quality perplexity,needle,tasks` runs
     the quality tasks for FP8 weights + FP8 KV instead of the servers. `--graphs` starts the picked servers
-    only to record which CUDA graphs vLLM captured (the servers that ran before this was logged).
+    only to record which CUDA graphs vLLM captured (the servers that ran before this was logged). `--plan`
+    times FlashInfer's plan and attention calls instead of running servers.
     """
     from fastserve.results import append_jsonl, git_info, make_record, new_run_id
 
@@ -1511,6 +1533,14 @@ def m8(
             print(json.dumps(result, indent=2)[:3000], flush=True)
         return
     out = REPO / "results" / "raw" / "m8_ablation.jsonl"
+    if plan:
+        records = m8_plan_cost.remote(config, new_run_id(), git)
+        for record in records:
+            m = record["metrics"]
+            took = m.get("error") or f"host {m['host_ms']['p50']:.3f} ms, total {m['total_ms']['p50']:.3f} ms"
+            print(f"{m['kind']:18s} batch {m['batch']:3d} context {m['context']:5d}: {took}", flush=True)
+        print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
+        return
     if graphs:
         run_id, records = new_run_id(), []
         for result in m8_smoke.map(names, kwargs={"config_path": config}):

@@ -1,0 +1,12 @@
+{
+  "milestone": "M8",
+  "written_in_commit": null,
+  "note": "Written before FlashInfer's calls were timed (experiments/m8.py). What is known: every server with FlashInfer and speculation takes about 24-26 ms per pass at one user, on Qwen3-0.6B and Qwen3-1.7B alike, although the same passes on FlashAttention take 5.7 and 18 ms. The two models have the same attention shapes (28 layers, 16 query heads, 8 KV heads, head_dim 128). A fixed added cost would raise both by the same amount; a floor says something that does not depend on the model runs beside the GPU and is slower than it: the host. On an L4, vLLM sends a speculative pass (4 tokens per sequence) down FlashInfer's prefill path: one full plan() per pass and one run() from Python per layer, for the target and for each drafter step. All values are host milliseconds per call (until the call returns), one sequence, 600 cached tokens.",
+  "predictions": [
+    {"id": "plan_prefill_host_ms", "label": "Prefill plan(), host ms per call", "low": 0.5, "high": 5.0},
+    {"id": "run_prefill_host_ms", "label": "Prefill run() with 4 query tokens, host ms per call", "low": 0.3, "high": 0.9},
+    {"id": "pass_host_ms", "label": "Host ms of one speculative pass's FlashInfer calls: 28 x prefill run + 4 x prefill plan (the servers' floor is about 24)", "low": 12.0, "high": 26.0},
+    {"id": "plan_graph_host_ms", "label": "fast_decode_plan (what a full CUDA graph needs), host ms per call", "low": 0.02, "high": 0.2},
+    {"id": "run_decode_host_ms", "label": "Decode run() with 1 query token, host ms per call", "low": 0.03, "high": 0.2}
+  ]
+}

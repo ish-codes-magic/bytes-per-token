@@ -462,3 +462,31 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     FlashInfer's own multi-token path (it treats a 4-token decode as a prefill and plans it on the host).
   - `aps`: the INT4 branch without the collision, the candidate for the best one-user stack.
   - Server starts now record which CUDA graphs were captured (`cuda_graphs` in `server_start`).
+- **First controls: my hypothesis was half wrong.** 5 of 8 control predictions in range.
+  - `fs` ÷ `ks` = 0.98 at one user: the FP8 bytes are innocent. Right.
+  - `g` ÷ `base` = 0.99 and `sg` ÷ `s` = 0.99: taking the full CUDA graph away from FlashAttention costs
+    nothing measurable. I predicted 0.82–0.96. **Wrong:** the graph mode is not the cause, and the log
+    message I built the hypothesis on names a symptom.
+  - What is left: FlashInfer when speculation is on. `fs` 83 tok/s against `s` 113.
+  - `aps` (INT4 weights, prefix caching, speculation; no FP8 KV) is the fastest stack at one user: 207 tok/s,
+    3.08× stock. In range.
+- **Correction to the entry above: "the GPU is waiting for the host" was a guess.** Lower power also fits a
+  kernel that keeps few SMs busy. Not established at that point.
+- **A pattern that points at the host after all.** Milliseconds per pass at one user (TPOT × tokens kept):
+  - on FlashAttention: 0.6B `wps` 5.7, 1.7B `ws` 13.4, 1.7B `s` 18.0;
+  - on FlashInfer: 0.6B `wks` 25.5, 1.7B `wks` 24.0, 1.7B `ks` 25.3, 1.7B `fs` 24.6.
+  A fixed extra cost would add the same to each. Instead every FlashInfer pass lands on ~25 ms whatever the
+  model, and the two models share their attention shapes (28 layers, 16 heads, head_dim 128). A floor like
+  that is what a second, slower chain running beside the GPU looks like.
+- **What vLLM's source says** (0.30, `v1/attention/backends/flashinfer.py`):
+  - A speculative pass counts as a decode only if FlashInfer's TRTLLM kernels exist
+    (`supports_spec_as_decode`). They need Hopper or newer. On an L4 the threshold stays at one token, so a
+    4-token pass is planned as a *prefill*: `prefill_wrapper.plan()` on the host every pass, then `run()`
+    from Python in each layer.
+  - `fast_plan_decode` (the cheap plan) is used only inside a full CUDA graph; outside one it "turns back
+    to the original plan".
+  - So this collision should not exist on an H100. It is a property of vLLM 0.30 on pre-Hopper GPUs, not of
+    FP8 KV or of speculation.
+- **Second controls** (`f`, `fg`; predictions in `m8_controls2.json`) and **a direct measurement**
+  (`experiments/m8.py`: FlashInfer's plan and run calls, made as vLLM makes them, timed on the host and to
+  completion; predictions in `m8_plan.json`).
