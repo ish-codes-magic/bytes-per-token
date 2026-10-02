@@ -559,3 +559,43 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
   startup-only runs. Modal had billed $22.04 for October by 08:00 UTC on the 2nd, before most of that. The
   month will end near or above the $30 credit. No GPU was used after the last profile; the GPU test suite
   was not re-run for this gate (no kernel or engine code changed in M8).
+
+### M9: presentation
+
+- **M8 gate decisions (from the owner).** Approved, tagged `v0.8-full-stack`. Quick reproduce is to work
+  without a GPU; the full reproduction and the open question's profile are to be kept runnable and run
+  later by the owner. Recorded as ADR 002.
+- **No GPU was used in M9.** The Python tests ran on GitHub Actions; the JavaScript tests and the page's
+  rendering ran on the laptop (Node and a headless browser were already installed).
+- **Quick reproduce.** The figure renderer moved out of the Modal app into `viz/render.py`, which needs no
+  torch. `scripts/make_figures.py --check` redraws every figure and compares each caption with the committed
+  one. CI runs `make reproduce-quick` on every push.
+  - First run in CI: all 52 figures of M0–M8 redrew to their committed captions. Nothing was stale.
+- **Dashboard** (`site/`): one generated data file, a static page, the serving model ported to JavaScript.
+  - The port matches Python on 192 inputs (tolerance 1e-9). The reference is computed from the rounded
+    constants the page loads, so the tolerance can be tight.
+  - A workload preset in the calculator reproduces the prediction frozen before M8 (115 predictions), and
+    the page's recommendation map equals Python's (126 cells). Both are tests.
+- **Surprise: a mislabeled waterfall that every check passed.** The data file was written with sorted keys,
+  so the techniques came out as k, p, s, w, and the page paired them with the ladder's steps by position.
+  Right heights, wrong names. Found by looking at the rendered page next to M8's figure. Fixed by deriving a
+  step's technique from the letter its label gains, plus a test that states the order.
+- **Surprise: `site/` was ignored by git.** The stock Python `.gitignore` has `/site` for mkdocs. The first
+  `git add` refused, and because the commands were chained nothing after it was committed either. Line
+  removed.
+- **Slip: a test file named like an existing one** (`tests/viz/test_render.py` next to
+  `tests/report/test_render.py`) broke collection in CI. Renamed. The laptop cannot run pytest, so CI is
+  where such things show.
+- **The open question, a step further without spending anything.** `scripts/compare_profiles.py` on the two
+  existing small-model profiles: with FP8 weights, trivial Python calls (`Tensor.split`) take several times
+  longer per call at the same call count, `execute_model` has unattributed self time, and lock waits grow.
+  That reads like the main thread being slowed across the board. A lead, not a finding: those profiles kept
+  40 rows and the profiler distorts the code under suspicion. `make open-question` runs the pair on the 1.7B
+  model with 150 rows kept.
+- **Model cards.** The eight cards on the Hub were fetched and are identical to `results/model_cards/`.
+- **Predictions.** None were committed before M9's checks ran, and none were written afterwards. The
+  project's scoreboard: 150 of 224 range predictions inside their range.
+- **Not done:** the full reproduction (budget); a Dockerfile (ADR 001); topic docs 00–03 as separate files;
+  hosting the dashboard (the owner's switch); looking at the page on a phone.
+- **Billing.** $22.97 billed for October through 09:00 UTC on the 2nd when last refreshed; M8's last runs
+  are not in it yet.
