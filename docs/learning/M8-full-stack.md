@@ -112,6 +112,7 @@ each.
   BF16 cache, to separate the kernel from the bytes); the INT4 branch (`a`, `akps`); and the base and the full
   stack run twice.
 - Qwen3-0.6B: the ladder and leave-one-out, with a community EAGLE-3 head.
+- Ten control servers were added while explaining the results (section 5.3). They are in the same config.
 
 **Five workloads**, the same on every server:
 
@@ -262,4 +263,214 @@ And the ranges I commit to (`benchmarks/predictions/m8.json`), with the reasonin
 
 ## 5. Result
 
-*Filled in after the measurements.*
+<!-- BEGIN GENERATED: m8_findings -->
+- **The best measured stack, Qwen3-1.7B on one L4, against stock BF16 vLLM:** latency `wps` 2.25×, busy `wps` 1.46×, capacity `wkps` 2.28×, multi-turn `wps` 2.76×, long `wkps` 1.22×. With INT4 weights allowed (lower quality, M4): latency `aps` 3.08×, busy `aps` 1.49×, multi-turn `aps` 3.13×.
+- **The full stack (`wkps`: FP8 weights, FP8 KV, prefix caching, speculation) is the best stack on 2 of 5 workloads on Qwen3-1.7B and 0 of 5 on Qwen3-0.6B.** At one user it gives 1.13× where `wps` gives 2.25×; on Qwen3-0.6B it is slower than stock (0.48×).
+- **Why: one pair collides.** With an FP8 KV cache and speculation together, vLLM 0.30 gives up its full CUDA graph on this GPU, and a step then waits for the host instead of the GPU: 25.8 ms per step against 4.6 with the graph, for the same GPU work (Qwen3-0.6B, FP8 weights, piecewise graphs forced on a control server).
+- **Everything else nearly multiplies:** 17 of 24 pair × workload interactions are within 5% of 1. FP8 KV × speculation is 0.77 at one user.
+- **Quality of the lossy part of the stack** (FP8 weights + FP8 KV, Qwen3-1.7B, in vLLM): perplexity ×0.996, needle recall 100%, GSM8K -1.3, MMLU -0.4 and HumanEval -6.1 points. Prefix caching does not change outputs; speculation is lossless in distribution (M6).
+- **The serving model, frozen before any M8 server ran:** median error 6.4% over 125 predictions (66% within 15%), 3.5% on servers without speculation. Its large misses are the colliding servers: it had no term for the host. With that one constant fitted on M8, the same points come to 5.1% (71% within 15%).
+<!-- END GENERATED: m8_findings -->
+
+The full analysis is in [docs/06-results-analysis.md](../06-results-analysis.md) and the model's in
+[docs/07-performance-model.md](../07-performance-model.md). This section is about the gap between section 4
+and what happened.
+
+### 5.1 The predictions
+
+<!-- BEGIN GENERATED: m8_predictions -->
+*Predictions written in commit `d4b75a2`, before the first measurement.*
+
+| Quantity | Predicted | Measured | Verdict |
+|---|---|---|---|
+| Full stack (wkps) on latency (x) | 1.8 – 2.5 | 1.13 | below range |
+| Full stack on busy (x) | 1.5 – 2.1 | 1.25 | below range |
+| Full stack on capacity (x) | 1.6 – 2.6 | 2.28 | within range |
+| Full stack on multi-turn (x) | 2.8 – 4.3 | 2.27 | below range |
+| Full stack on long (x) | 1.15 – 1.5 | 1.22 | within range |
+| Full stack with INT4 weights ÷ with FP8 weights, latency (x) | 1.1 – 1.4 | 1.41 | above range |
+| Full stack with INT4 weights ÷ with FP8 weights, busy (x) | 0.8 – 1.05 | 1.07 | above range |
+| FP8 weights + speculation on latency: combined ÷ product of the two alone | 0.8 – 1 | 0.919 | within range |
+| FP8 weights + FP8 KV on busy: combined ÷ product | 0.95 – 1.15 | 0.914 | below range |
+| FP8 KV + speculation on capacity: combined ÷ product | 0.7 – 1 | 0.841 | within range |
+| Prefix caching + speculation on multi-turn: combined ÷ product | 1 – 1.35 | 1.11 | within range |
+| FP8 weights + prefix caching on multi-turn: combined ÷ product | 0.95 – 1.15 | 1.03 | within range |
+| FP8 KV + prefix caching on multi-turn: combined ÷ product | 0.9 – 1.15 | 1.03 | within range |
+| Full stack ÷ full stack without speculation, latency (x) | 1.25 – 1.7 | 0.838 | below range |
+| Full stack ÷ full stack without FP8 weights, latency (x) | 1.2 – 1.5 | 0.897 | below range |
+| Full stack ÷ full stack without FP8 KV, capacity (x) | 1.2 – 1.6 | 1.46 | within range |
+| Full stack ÷ full stack without prefix caching, multi-turn (x) | 1.7 – 2.5 | 1.62 | below range |
+| Prefix caching where nothing is shared: wp ÷ w on latency (x) | 0.97 – 1.03 | 0.995 | within range |
+| Share of the FP8-KV step's gain on capacity that FlashInfer alone gives: (wf − w) ÷ (wk − w) | 0.1 – 0.4 | 0.21 | within range |
+| Tokens per target pass with EAGLE-3 on capacity's random-token prompts (assumed 2.1 in the model) | 1.3 – 2.8 | 2.42 | within range |
+| Serving model, frozen predictions vs M8: median error in tokens/s, all servers and workloads | 0.03 – 0.15 | 0.0635 | within range |
+| Serving model: share of M8 points predicted within 15% | 0.5 – 0.9 | 0.664 | within range |
+| Serving model: median error on M8 servers without speculation | 0.02 – 0.1 | 0.0348 | within range |
+| Largest difference in tokens/s between two runs of the same server, any workload | 0 – 0.05 | 0.0889 | above range |
+| Tokens per joule, full stack ÷ base, latency (x) | 1.6 – 2.6 | 1.38 | below range |
+| Mean GPU power of the base server at 64 users (W; the L4's limit is 72) | 60 – 72 | 69.7 | within range |
+| Qwen3-0.6B: full stack on latency (x; a community EAGLE-3 head) | 1.3 – 2 | 0.478 | below range |
+| Qwen3-0.6B: full stack on busy (x) | 1.4 – 2.2 | 0.809 | below range |
+| Qwen3-0.6B: full stack on multi-turn (x) | 2.5 – 4 | 0.889 | below range |
+| Perplexity, FP8 weights + FP8 KV ÷ BF16 (WikiText-2, in vLLM) | 0.99 – 1.03 | 0.996 | within range |
+| Needle recall, FP8 weights + FP8 KV | 0.95 – 1 | 1 | within range |
+| GSM8K, FP8 weights + FP8 KV minus BF16 (points of accuracy) | -0.06 – 0.03 | -0.0129 | within range |
+<!-- END GENERATED: m8_predictions -->
+<!-- BEGIN GENERATED: m8_prediction_score -->
+**18 of 32 predictions in range.**
+<!-- END GENERATED: m8_prediction_score -->
+
+The misses are not scattered. Almost every one is the same event seen from a different side:
+
+- the full stack on latency, busy and multi-turn, on both models;
+- the two leave-one-out rows where removing a technique made the stack *faster*;
+- tokens per joule at one user;
+- the spread between two runs of the full stack.
+
+What held: every interaction that does not involve the colliding pair, the capacity and long workloads,
+prefix caching doing nothing where nothing is shared, FlashInfer's share of the FP8-KV gain, quality, and the
+model's own error budget.
+
+### 5.2 The one event: a stack that waits for its host
+
+**The analogy.** A kitchen with one very fast oven (the GPU) and one cook (the host's Python). Normally the
+cook hands the oven a whole tray with one written order, and the oven is the only thing anyone waits for.
+That written order is a **CUDA graph**: the whole forward pass, recorded once and replayed with one call.
+
+If the order cannot be written down in advance, the cook walks to the oven for every dish: 28 layers, 28
+trips, plus the paperwork around each. Now the oven finishes each dish and stands idle until the cook
+arrives. How fast the oven is no longer matters. That is a **piecewise** graph: the stretches between
+attention calls are recorded, and Python runs everything in between.
+
+**What happened.** On this GPU, vLLM cannot record a speculative pass as one graph when the attention kernel
+is FlashInfer, and an FP8 KV cache needs FlashInfer. So `k` and `s` together put the server on piecewise
+graphs. A step then takes
+
+    step ≈ max(what the GPU needs, what the host needs)
+
+and the host needed more:
+
+<!-- BEGIN GENERATED: m8_host_chain -->
+| Model | Server | Weights | Attention | Speculation | ms per step, piecewise graphs | ms per step, full graph (closest server) | GPU power (W) | GPU power, full graph (W) |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3-0.6B | `wkps` | FP8 | FlashInfer | yes | 25.0 | 6.0 (`wps`) | 46 | 69 |
+| Qwen3-0.6B | `kps` | BF16 | FlashInfer | yes | 19.4 | — | 53 | — |
+| Qwen3-0.6B | `wks` | FP8 | FlashInfer | yes | 25.5 | 6.0 (`wps`) | 47 | 69 |
+| Qwen3-0.6B | `wsg` | FP8 | FlashAttention | yes | 28.3 | 6.0 (`wps`) | 43 | 69 |
+| Qwen3-0.6B | `wg` | FP8 | FlashAttention | no | 25.8 | 4.6 (`w`) | 38 | 70 |
+| Qwen3-0.6B | `g` | BF16 | FlashAttention | no | 12.1 | 5.9 (`base`) | 61 | 71 |
+| Qwen3-1.7B | `wks` | FP8 | FlashInfer | yes | 24.8 | 13.9 (`ws`) | 65 | 71 |
+| Qwen3-1.7B | `ks` | BF16 | FlashInfer | yes | 25.2 | 18.7 (`s`) | 70 | 72 |
+| Qwen3-1.7B | `wkps` | FP8 | FlashInfer | yes | 27.6 | 13.9 (`wps`) | 58 | 71 |
+| Qwen3-1.7B | `kps` | BF16 | FlashInfer | yes | 25.0 | 18.6 (`ps`) | 71 | 71 |
+| Qwen3-1.7B | `akps` | INT4 | FlashInfer | yes | 19.7 | 10.1 (`aps`) | 60 | 71 |
+| Qwen3-1.7B | `sg` | BF16 | FlashAttention | yes | 18.8 | 18.7 (`s`) | 71 | 72 |
+| Qwen3-1.7B | `fs` | BF16 | FlashInfer | yes | 25.3 | 18.7 (`s`) | 69 | 72 |
+| Qwen3-1.7B | `g` | BF16 | FlashAttention | no | 15.0 | 14.9 (`base`) | 72 | 72 |
+| Qwen3-1.7B | `fg` | BF16 | FlashInfer | no | 16.0 | 15.4 (`f`) | 72 | 72 |
+| Qwen3-1.7B | `wg` | FP8 | FlashAttention | no | 25.3 | 10.3 (`w`) | 50 | 72 |
+<!-- END GENERATED: m8_host_chain -->
+
+**Why it hides.** Where the GPU already needs longer than the host, nothing changes, and the GPU stays at
+its power limit. That is why forcing piecewise graphs on Qwen3-1.7B with BF16 weights showed no loss, and why
+I first cleared the graph mode. The same control on a model whose GPU work is short exposed it.
+
+**The third lever, in reverse.** "Less waste between bytes and math" is usually told as a gain: fuse
+kernels, capture graphs. M8 shows the same lever as a loss. Nothing about the bytes or the math changed; only
+the waste between them did, and it took a server from the fastest configuration to one slower than stock.
+
+### 5.3 What the investigation got wrong on the way
+
+Four rounds of controls, each with predictions committed first
+([06, section 6](../06-results-analysis.md#6-the-pair-that-collides)):
+
+| Round | What I believed going in | What the controls said |
+|---|---|---|
+| 1 | Losing the graph costs some host time per layer | Right that the FP8 bytes are innocent. Wrong conclusion drawn: "piecewise graphs cost nothing" |
+| 2 | Then it must be FlashInfer's planning on the host | FlashInfer's calls, timed alone, are a small fraction of a pass |
+| 3 | Then it is vLLM's Python, and round 1 could not see it | Confirmed, and larger than predicted |
+| 4 | FP8 weights lengthen the host's work | Confirmed on both models. Why is still open |
+
+The lesson is about controls, not about vLLM: **a control can only show an effect that is larger than
+whatever else bounds the measurement.** Round 1's control was run correctly and read wrongly: a GPU pass
+that takes longer than the host hides the host. Before trusting a null result, ask what the measurement
+could have seen.
+
+### 5.4 The model
+
+It was within a few percent wherever a full graph was kept, and wrong by a large factor where it was not
+([07](../07-performance-model.md)). A model built from bytes and FLOPs has nothing to say about a host. That
+is the honest boundary of roofline reasoning: it bounds what the GPU can do, and a server can fall well
+short of that bound for reasons that are not on the GPU.
+
+## 6. Check your understanding
+
+**1. A technique gives a clear gain alone. Inside the full stack, removing it makes the stack faster. How can
+both be true?**
+
+<details><summary>Answer</summary>
+
+"Alone" and "in the stack" measure different things. Alone, it shortens the part of a step that was the
+bottleneck. In the stack it also changes *which* code path the server runs. Here FP8 KV brings a different
+attention kernel, and that kernel with speculation costs the server its full CUDA graph. Removing either
+technique ends that, which is worth more than what the technique saves. This is why a gain must always be
+reported with what else was on.
+</details>
+
+**2. Interaction is S(A + B) ÷ (S(A) · S(B)). FP8 weights × speculation is a little below 1 at one user and
+about 1 at 96 users with long prompts. Why?**
+
+<details><summary>Answer</summary>
+
+Speculation pays for k drafted tokens with a roughly fixed cost and gets back time saved on target steps. At
+one user the target step is a read of the weights. FP8 weights make that step shorter, so each accepted
+token saves less while the drafter costs the same: they compete for the same slack. At 96 users with 4k
+prompts the step is KV reads, which FP8 weights do not touch, so the two act on different terms and multiply.
+</details>
+
+**3. Forcing piecewise graphs on the 1.7B model with BF16 weights cost nothing. On the 0.6B model with FP8
+weights it made a step several times longer. Same code path. Explain.**
+
+<details><summary>Answer</summary>
+
+A step takes about max(GPU time, host time). On piecewise graphs the host needs an amount of time per step
+that depends on the number of layers and on the weights' format, not on the model's width. On the 1.7B model
+with BF16 weights the GPU needs longer than that, so the host is hidden and nothing changes. On the 0.6B
+model the GPU needs a few milliseconds, the host far more, and the step becomes the host's. FP8 weights make
+it worse twice: they shorten the GPU's part and lengthen the host's.
+</details>
+
+**4. The full stack draws less GPU power than the stock server at one user. Is that an energy saving?**
+
+<details><summary>Answer</summary>
+
+No. Power is lower because the GPU idles while it waits for the host. Energy per token is power × time per
+token, and the time went up. Tokens per joule is the number to look at. Where the stack is genuinely faster
+(capacity), power stays at the limit and tokens per joule improve by the speedup.
+</details>
+
+**5. The model's median error on M8 was within the range I predicted for it. Does that make it a good
+model?**
+
+<details><summary>Answer</summary>
+
+It makes it a good model of what it models. Its median is small because most servers keep their full graph.
+The servers it got wrong, it got wrong by a large factor, and they are the ones that matter most for the
+headline: the full stack. A median hides a cluster. The useful summary is the split: a few percent where a
+pass is bound by the GPU, and no skill at all where it is bound by the host, until that term was added.
+</details>
+
+## 7. Further reading
+
+- Kwon et al., *Efficient Memory Management for Large Language Model Serving with PagedAttention* (vLLM),
+  SOSP 2023. The engine being configured.
+- Ye et al., *FlashInfer: Efficient and Customizable Attention Engine for LLM Inference Serving*, 2025. The
+  attention kernels and the plan/run split.
+- Li et al., *EAGLE-3: Scaling up Inference Acceleration of Large Language Models via Training-Time Test*,
+  2025. The drafter.
+- NVIDIA, *CUDA C++ Programming Guide*, the section on CUDA Graphs. What a graph records, and why replaying
+  it removes the host's cost per launch.
+- vLLM's design notes on CUDA graphs (docs.vllm.ai): full and piecewise capture, and which attention
+  backends support which.
+- Williams, Waterman and Patterson, *Roofline: An Insightful Visual Performance Model for Multicore
+  Architectures*, CACM 2009. What a roofline bounds, and by implication what it does not.
