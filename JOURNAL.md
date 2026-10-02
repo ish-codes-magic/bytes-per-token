@@ -340,3 +340,74 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **A borderline result checked, not waved through:** float32 speculative sampling scored χ² = 11.8 at a
   limit of 12 with 600 samples. With 3,000 samples it scored 2.6. A bias would have grown fivefold.
 
+- **M7 started. What vLLM already has, read from the installed source before designing anything:**
+  - A fused RMSNorm + quantization op exists (`rms_norm_dynamic_per_token_quant`) and a compile pass that
+    rewrites norm → quant into it (`rms_quant_fusion.py`). Its tables hold FP8 keys only. For INT8
+    checkpoints the two ops always run apart. So kernel 1 targets INT8, not FP8 as AGENTS.md first suggests.
+  - No attention backend reads an INT4 or INT8 KV cache. FlashInfer exposes a single-request decode call
+    (`single_decode_with_kv_cache`), which gives kernel 2 a production kernel to be compared with.
+  - API note: the serving image has Triton 3.7.1, the research image 3.8.0. Both kernels run on both.
+- **Order of work, stated honestly:** both kernels and their references were written and tested for
+  correctness before the formal profile ran. No kernel was *timed* before the profile was recorded and the
+  predictions committed (`eb13c86`).
+- **Profile findings:**
+  - nanoserve's decode step at 32k tokens: attention is 71% of it and reads the cache at 14% of the
+    bandwidth. At 512 tokens the step is launch-bound and attention is 15%.
+  - vLLM's `rms_norm` and `scaled_int8_quant` each cost ~1.6 µs in a CUDA graph at decode sizes and run at
+    ~235 GB/s at 32,768 tokens. vLLM's own fused FP8 op is 3.5–4.4× slower than its two INT8 ops at
+    4,096 tokens.
+  - **M4 was partly wrong.** M4 blamed W8A8-INT8's unexplained batch-1 gap on the separate quantization op.
+    112 launches × 1.6 µs = 0.18 ms, against a gap of 0.37 ms (0.6B) and 0.62 ms (1.7B): 47% and 29%. I had
+    drafted a prediction about this, then saw the profile already answered it and removed the prediction
+    rather than keep one I knew the answer to. M4's docs now carry a correction.
+- **M7 results. 21 of 29 predictions in range.**
+  - **Kernel 1** vs vLLM's two ops in a CUDA graph: 1.9× for one token, 2.5× at 4,096 tokens, 2.3× at
+    32,768 (90% of the bandwidth). From Python: 0.95× for one token (Triton's launcher costs what two native
+    calls cost). 96.6–97.8% of its codes equal vLLM's, never more than one apart: vLLM rounds the norm's
+    output to BF16 first.
+  - **Kernel 2**, one layer, 1 × 32,768 tokens: PyTorch's path 3.2 ms; FlashInfer (FP16) 0.54 ms; kernel 2
+    on BF16 0.58 ms, INT8 0.32 ms, INT4 0.21 ms. So INT4 codes are 2.6× FlashInfer on full precision, and
+    on the same bytes FlashInfer wins (0.93×). At 512 tokens kernel 2 loses to FlashInfer (0.44×).
+  - **nanoserve**, 1 × 32,000 tokens: 139 → 54 ms per step (2.6×), identical for BF16, INT8 and INT4 caches.
+    At 512 and 4,096 tokens the new cache is slower (0.7×).
+  - **Quality through the real kernel:** KL 0.0011 (BF16 read by the kernel: the yardstick's floor), 0.0012
+    (INT8), 0.011 (INT4); needle recall 75 of 75 with INT4.
+- **Surprise: the best split is tiny.** Predicted 512–2,048 tokens per program; measured 128, with one warp.
+  More programs keep more loads in flight, and one warp keeps a program's sums inside the warp. Defaults
+  were set from the first sweep.
+- **Surprise that became a methodology fix: "cold" timings were biased.**
+  - Symptom: cold timings of the BF16 kernel at 32k tokens (128 MiB, far beyond L2) were ~150 µs *slower*
+    than a warm CUDA-graph replay. Warm cannot help data that doesn't fit in cache.
+  - Cause: `cuda_time_ms(flush_l2_bytes=…)` evicts L2 by overwriting a scratch buffer. The cache is then
+    full of modified lines, and the timed call pays to write them back.
+  - Fix: evict by reading (`flush_by="read"`). FlashInfer at 32k went from 691 to 539 µs.
+  - Check: vLLM's short step + 28 × FlashInfer's layer time = 20.9 ms with the read flush (vLLM measured
+    20.6) and 25.1 ms with the write flush. The read flush is the right one.
+  - Consequence: M0's cold matmuls and M1's decode points used the write flush. Not re-measured (outside
+    M7); proposed for M8, before the performance model is fitted.
+  - The attention benchmark and the tuning sweep were rerun with the read flush. The first runs stay in
+    `results/raw/m7_kernels.jsonl`.
+- **Surprise: the cold timing hides Python.** The flush keeps the GPU busy while Python queues the next
+  call, so a "cold" number is pure GPU time. From Python, kernel 2 costs ~210 µs per call at any short
+  context (launcher + the merge's small ops) against PyTorch's ~150 µs. That is why the kernel "wins" at
+  512 tokens on the cold clock (1.3×) and nanoserve still gets slower there.
+- **Finding: INT4 is instruction-bound.** At 1 × 32,768 the INT4 cache (37 MiB) fits in L2, and the warm
+  graph replay takes 201 µs against 205 µs cold. Warm at 8,192 tokens, BF16 and INT4 both take 65 µs.
+  BF16 and INT8 are memory-bound at 86–94% of the bandwidth; INT4 tops out near 72%.
+- **Finding: after fusion nanoserve is bound by Python.** At 16k tokens the GPU works 69 of 72 ms before
+  and 12 of 73 ms after (under the profiler), in 2,582 kernels. The old path's time was three copies of the
+  cache: an indexing kernel reading it out (14 ms), elementwise copies to give each query head its own K
+  and V (25 ms), then PyTorch's attention kernel (24 ms).
+- **Lost run:** the first nanoserve task died at the timeline step. A decode step created under
+  `inference_mode` was called by the profiler after its maker returned, so its tokens met autograd.
+  Nothing was recorded. The step function now carries the decorator itself.
+- **Provenance note:** the second nanoserve run was launched with the figure module uncommitted and is
+  flagged dirty. It was rerun from a clean tree; the reports use the newest records.
+- **Dead ends and things not done:**
+  - Tensor cores for INT4's inner products (`tl.dot`): needs half-precision operands, and the scaled
+    queries would lose precision. Not attempted. It is the next step for the instruction bound.
+  - A fused merge kernel, to cut the ~27 µs fixed cost that loses to FlashInfer at short context.
+  - vLLM integration of either kernel. The path is written down in docs/04-kernels.md; the projection there
+    is labeled as one.
+- **Still open from earlier:** the rest of M4's INT8 gap; the INT4 drafter that is slower inside vLLM's
+  speculative loop (M6), which M7's profiling did not reach.
