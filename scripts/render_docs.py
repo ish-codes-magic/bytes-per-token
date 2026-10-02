@@ -154,15 +154,18 @@ def m7_blocks(m7: list, m5: list, m4: list, configs: dict, bandwidth: float) -> 
     return blocks
 
 
-def m8_blocks(earlier: dict[str, list], hw_records: list, configs: dict) -> dict[str, str]:
-    """The serving model: its calibration, its check against M2–M6, and what it predicts for the M8 plan."""
+def m8_blocks(
+    earlier: dict[str, list], hw_records: list, configs: dict, m8: list, m7: list, m2_quality: list
+) -> dict[str, str]:
+    """The serving model (calibration, its check against M2–M6, its predictions) and M8's ablation."""
     import yaml
 
     config = yaml.safe_load(
         (REPO / "benchmarks" / "configs" / "m8_ablation.yaml").read_text(encoding="utf-8")
     )
     workloads = yaml.safe_load((REPO / config["workloads_file"]).read_text(encoding="utf-8"))
-    frozen = json.loads((REPO / "benchmarks" / "predictions" / "m8_model.json").read_text(encoding="utf-8"))
+    predictions = REPO / "benchmarks" / "predictions"
+    frozen = json.loads((predictions / "m8_model.json").read_text(encoding="utf-8"))
     head = config["techniques"]["s"]["head"]
     hw = m8_report.hardware(hw_records)
     cal = m8_report.calibration_of(frozen)
@@ -171,13 +174,45 @@ def m8_blocks(earlier: dict[str, list], hw_records: list, configs: dict) -> dict
     )
     large = ["w", "k", "p", "s", "wk", "wkp", "wkps", "akps"]
     small = ["w", "wk", "wkp", "wkps"]
-    return {
+    blocks = {
         "m8_calibration": m8_report.calibration_table(cal, points),
         "m8_validation": m8_report.validation_table(points, configs, hw, cal),
         "m8_worst": m8_report.worst_points(m8_report.modeled(points), configs, hw, cal),
         "m8_predicted_large": m8_report.predicted_speedups(frozen, LARGE, large),
         "m8_predicted_small": m8_report.predicted_speedups(frozen, SMALL, small),
     }
+    if m8_report.tok_s(m8, LARGE, m8_report.FULL, "m8_latency") is None:  # the ablation has not run yet
+        return blocks
+    price = config["dollars_per_hour"]
+    hand = json.loads((predictions / "m8.json").read_text(encoding="utf-8"))
+    observed = m8_report.m8_observables(m8, frozen, earlier["m4"], m2_quality)
+    measured_points = m8_report.m8_points(m8, config, configs, workloads)
+    blocks.update(
+        {
+            "m8_predictions": prediction_table(hand, observed),
+            "m8_prediction_score": prediction_score(hand, observed),
+            "m8_ladder_large": m8_report.ladder_table(m8, LARGE, price),
+            "m8_ladder_small": m8_report.ladder_table(m8, SMALL, price),
+            "m8_leave_one_out": m8_report.leave_one_out_table(m8, LARGE),
+            "m8_leave_one_out_small": m8_report.leave_one_out_table(m8, SMALL),
+            "m8_interactions": m8_report.interaction_table(m8, LARGE),
+            "m8_repeats": m8_report.repeat_table(m8, LARGE),
+            "m8_kept": m8_report.kept_table(m8, LARGE),
+            "m8_kept_small": m8_report.kept_table(m8, SMALL),
+            "m8_energy": m8_report.energy_table(m8, LARGE),
+            "m8_failures": m8_report.failures_table(m8),
+            "m8_model_errors": m8_report.model_error_table(m8, frozen),
+            "m8_model_worst": m8_report.worst_predictions(m8, frozen),
+            "m8_model_informed": m8_report.informed_error_table(measured_points, configs, hw, cal),
+            "m8_quality": m8_report.quality_table(m8, earlier["m5"], earlier["m4"], m2_quality),
+            "m8_cost": m8_report.cost_table(m8, price),
+            "m8_kernel_projection": m8_report.kernel_projection_table(m8, m7, configs),
+        }
+    )
+    for workload in m8_report.WORKLOADS:
+        for model, size in ((LARGE, "large"), (SMALL, "small")):
+            blocks[f"m8_steps_{workload}_{size}"] = m8_report.step_table(m8, model, workload, price)
+    return blocks
 
 
 def compute_spend(path: Path) -> str:
@@ -320,7 +355,11 @@ def build_blocks() -> dict[str, str]:
             name: read_jsonl(REPO / "results" / "raw" / f"{file}.jsonl")
             for name, file in m8_report.EARLIER.items()
         }
-        blocks.update(m8_blocks(earlier, latest_run(read_jsonl(probe)), configs))
+        ablation = REPO / "results" / "raw" / "m8_ablation.jsonl"
+        m8 = read_jsonl(ablation) if ablation.exists() else []
+        m7 = read_jsonl(kernels) if kernels.exists() else []
+        hw_records = latest_run(read_jsonl(probe))
+        blocks.update(m8_blocks(earlier, hw_records, configs, m8, m7, read_jsonl(quality)))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)

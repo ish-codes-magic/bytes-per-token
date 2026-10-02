@@ -993,6 +993,43 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             )
             bandwidth = measured_bandwidth(raw["hw"])
             written = m7_figures.make_all(raw["m7"], bandwidth, cfg, config["dollars_per_hour"], tmp)
+        elif milestone == "m8":
+            import yaml
+
+            from fastserve.report import m8 as m8_report
+            from fastserve.viz import m8_figures
+
+            config = yaml.safe_load(
+                Path(REMOTE, "benchmarks", "configs", "m8_ablation.yaml").read_text(encoding="utf-8")
+            )
+            frozen = json.loads(
+                Path(REMOTE, "benchmarks", "predictions", "m8_model.json").read_text(encoding="utf-8")
+            )
+            configs = {
+                model: ModelConfig.from_pretrained_json(
+                    Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
+                )
+                for model in (m8_report.SMALL, m8_report.LARGE)
+            }
+            perplexity = {
+                model: m8_report.perplexities(raw["m8"], raw["m5"], raw["m4"], model) for model in configs
+            }
+            projected = {}
+            for model in configs:
+                found = m8_report.kernel_projection(raw["m8"], raw["m7"], configs, model)
+                if found:
+                    projected[model] = found["tok_s"]
+            written = m8_figures.make_all(
+                raw["m8"],
+                frozen,
+                configs,
+                m8_report.hardware(raw["hw"]),
+                config["dollars_per_hour"],
+                perplexity,
+                config["techniques"]["s"]["head"],
+                projected,
+                tmp,
+            )
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -1140,6 +1177,7 @@ def figures(milestone: str = "all") -> None:
         ("m5", "m5_kv.jsonl"),
         ("m6", "m6_spec.jsonl"),
         ("m7", "m7_kernels.jsonl"),
+        ("m8", "m8_ablation.jsonl"),
     ):
         if (
             raw_dir / file
@@ -1147,7 +1185,7 @@ def figures(milestone: str = "all") -> None:
             raw[key] = read_jsonl(raw_dir / file)
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"] if milestone == "all" else [milestone]:
+    for ms in ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"] if milestone == "all" else [milestone]:
         if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():
