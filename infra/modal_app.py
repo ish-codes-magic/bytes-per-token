@@ -870,6 +870,20 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
             from fastserve.viz import m6_figures
 
             written = m6_figures.make_all(raw["m6"], tmp)
+        elif milestone == "m7":
+            import yaml
+
+            from fastserve.hw.analysis import measured_bandwidth
+            from fastserve.viz import m7_figures
+
+            config = yaml.safe_load(
+                Path(REMOTE, "benchmarks", "configs", "m5_kv.yaml").read_text(encoding="utf-8")
+            )  # the price of an L4 hour, as in M5's cost tables
+            cfg = ModelConfig.from_pretrained_json(
+                Path(REMOTE, "benchmarks", "models", "Qwen3-0.6B.config.json")
+            )
+            bandwidth = measured_bandwidth(raw["hw"])
+            written = m7_figures.make_all(raw["m7"], bandwidth, cfg, config["dollars_per_hour"], tmp)
         else:
             raise ValueError(f"unknown milestone {milestone!r}")
         return {path.name: path.read_bytes() for path in written}
@@ -1016,6 +1030,7 @@ def figures(milestone: str = "all") -> None:
         ("m4", "m4_production.jsonl"),
         ("m5", "m5_kv.jsonl"),
         ("m6", "m6_spec.jsonl"),
+        ("m7", "m7_kernels.jsonl"),
     ):
         if (
             raw_dir / file
@@ -1023,7 +1038,7 @@ def figures(milestone: str = "all") -> None:
             raw[key] = read_jsonl(raw_dir / file)
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2", "m3", "m4", "m5", "m6"] if milestone == "all" else [milestone]:
+    for ms in ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"] if milestone == "all" else [milestone]:
         if ms != "m0" and ms not in raw:
             continue
         for name, data in render_figures.remote(ms, raw).items():
