@@ -1,6 +1,6 @@
 {
   "milestone": "M8",
-  "written_in_commit": null,
+  "written_in_commit": "2069f67",
   "note": "Fourth and last round, written after the third was measured and before these two servers were timed. Third round: on Qwen3-0.6B with FP8 weights, piecewise graphs alone take 25.8 ms per engine step on FlashAttention without speculation (wg), against 4.6 ms with the full graph (w). So the graph mode is the cause, and the first round's 'g = base' on Qwen3-1.7B only showed that the host's chain is shorter than that model's 14.9 ms of GPU work. One inconsistency is left: the chain is at most 14.9 ms on 1.7B with BF16 weights (g) and 25.8 ms on 0.6B with FP8 weights (wg). The two models have the same number of layers, so the host should do the same work. Either FP8 weights lengthen the chain, or the small model does. These two servers swap the weights: BF16 on the small model, FP8 on the large one. Values are milliseconds per engine step at one user.",
   "predictions": [
     {"id": "control_small_g_step_ms", "label": "Qwen3-0.6B, BF16 weights, piecewise graphs only: ms per step (full graph: 5.9; if FP8 is what lengthens the chain, well below wg's 25.8)", "low": 6.0, "high": 15.0},
