@@ -27,6 +27,7 @@ from fastserve.report import m5 as m5_report  # noqa: E402
 from fastserve.report import m6 as m6_report  # noqa: E402
 from fastserve.report import m7 as m7_report  # noqa: E402
 from fastserve.report import m8 as m8_report  # noqa: E402
+from fastserve.report import summary as summary_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -58,6 +59,7 @@ from fastserve.report.render import render_file  # noqa: E402
 from fastserve.report.tables import (  # noqa: E402
     decode_matmul_table,
     hw_summary,
+    markdown_table,
     model_facts,
     prediction_score,
     prediction_table,
@@ -227,6 +229,8 @@ def m8_blocks(
     errors = fit.errors(kept, configs, hw, informed_cal)
     informed = (fit.median_abs(errors), sum(abs(e) <= 0.15 for e in errors) / len(errors)) if errors else None
     blocks["m8_findings"] = m8_report.findings(m8, frozen, earlier["m4"], m2_quality, informed)
+    blocks["key_numbers"] = summary_report.key_numbers(hw, configs, m8, frozen)
+    blocks["versions"] = summary_report.versions(m8, hw_records)
     kept_per_pass = frozen["expected_loads"]["spec_mixed"]["tokens_per_pass"]
     example = config["example"]
     blocks["m8_example"] = m8_report.example_table(
@@ -269,6 +273,94 @@ def profile_difference(m8: list, first: str, second: str) -> str:
     if None in profiles:
         return f"*No profile of `{first}` or `{second}` yet.*"
     return compare_profiles.table(*profiles, top=10)
+
+
+SCOREBOARD = {  # block of predictions → what it predicted
+    "m0_predictions": "M0: the GPU's ceilings",
+    "m1_predictions": "M1: nanoserve",
+    "m2_predictions": "M2: stock vLLM under load",
+    "m2_quality_predictions": "M2: quality baselines",
+    "m3_predictions": "M3: quantization from scratch",
+    "m4_predictions": "M4: quantized checkpoints in vLLM",
+    "m5_predictions": "M5: the KV cache",
+    "m6_predictions": "M6: speculative decoding",
+    "m7_predictions": "M7: Triton kernels",
+    "m8_predictions": "M8: the full stack",
+    "m8_controls_1": "M8 investigation, round 1",
+    "m8_controls_2": "M8 investigation, round 2",
+    "m8_controls_plan": "M8 investigation: FlashInfer's calls",
+    "m8_controls_3": "M8 investigation, round 3",
+    "m8_controls_4": "M8 investigation, round 4",
+}
+
+
+def verdicts(table: str) -> list[str]:
+    """The last column of a prediction table's rows: "within range", "above range", ..."""
+    rows = [line for line in table.splitlines() if line.startswith("|")][2:]
+    return [row.rstrip("|").rsplit("|", 1)[-1].strip() for row in rows]
+
+
+def prediction_scoreboard(blocks: dict[str, str]) -> str:
+    """Every range prediction of the project, by milestone: how many, and how many held."""
+    rows, total, held = [], 0, 0
+    for name, title in SCOREBOARD.items():
+        if name not in blocks:
+            continue
+        ranged = [v for v in verdicts(blocks[name]) if v.endswith("range")]
+        inside = sum(v == "within range" for v in ranged)
+        total, held = total + len(ranged), held + inside
+        share = f"{100 * inside / len(ranged):.0f}%" if ranged else "—"
+        rows.append([title, str(len(ranged)), str(inside), share])
+    rows.append(
+        ["**All**", f"**{total}**", f"**{held}**", f"**{100 * held / total:.0f}%**" if total else "—"]
+    )
+    headers = ["Predictions written before measuring", "Ranges given", "Measured inside the range", "Share"]
+    return markdown_table(headers, rows)
+
+
+def documents() -> list[Path]:
+    """The files whose generated blocks are filled: the README and everything under docs/."""
+    return sorted([REPO / "README.md", *REPO.glob("docs/**/*.md")])
+
+
+def reproduction_table() -> str:
+    """What `make reproduce-quick` and the test suite check about the chain from raw records to the page."""
+    figures = sorted((REPO / "results" / "figures").glob("*.caption.txt"))
+    rows = [
+        [
+            "Figures redrawn from the raw records, caption equal to the committed one",
+            str(len(figures)),
+            "`make reproduce-quick`, in CI on every push",
+        ],
+        [
+            "Generated tables and captions placed in the README and docs",
+            str(sum(path.read_text(encoding="utf-8").count("<!-- BEGIN GENERATED:") for path in documents())),
+            "`scripts/render_docs.py`; CI fails if the committed docs differ",
+        ],
+    ]
+    data = REPO / "site" / "data" / "dashboard.json"
+    if data.exists():
+        site = json.loads(data.read_text(encoding="utf-8"))
+        deployable = [p for p in site["predictions"] if set(p["label"].replace("base", "")) <= set("wakps")]
+        cells = len(site["map"]["users"]) * len(site["map"]["contexts"]) * len(site["map"]["picks"])
+        rows += [
+            [
+                "Inputs on which the browser's model must equal the Python model",
+                str(len(site["checks"])),
+                "`site/tests/parity.mjs`, and the page itself on load",
+            ],
+            [
+                "Frozen predictions the calculator reproduces from a workload preset",
+                str(len(deployable)),
+                "`site/tests/logic.mjs`",
+            ],
+            [
+                "Recommendation-map cells equal to the ones Python computes",
+                str(cells),
+                "`site/tests/logic.mjs`",
+            ],
+        ]
+    return markdown_table(["What is checked", "How many", "By"], rows)
 
 
 def compute_spend(path: Path) -> str:
@@ -435,13 +527,15 @@ def build_blocks() -> dict[str, str]:
     for caption in (REPO / "results" / "figures").glob("*.caption.txt"):
         name = caption.name.removesuffix(".caption.txt")
         blocks[f"caption-{name}"] = f"*{caption.read_text(encoding='utf-8').strip()}*"
+    blocks["prediction_scoreboard"] = prediction_scoreboard(blocks)
+    blocks["m9_reproduction"] = reproduction_table()
     return blocks
 
 
 def main() -> int:
     blocks = build_blocks()
     missing_any = False
-    for path in sorted([REPO / "README.md", *REPO.glob("docs/**/*.md")]):
+    for path in documents():
         changed, missing = render_file(path, blocks)
         if changed:
             print(f"updated {path.relative_to(REPO)}")
