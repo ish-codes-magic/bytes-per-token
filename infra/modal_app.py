@@ -282,6 +282,83 @@ def m6_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     return to_plain(records)
 
 
+def _m8_config(config_path: str) -> dict:
+    """The M8 config with its plan expanded into the server list `run_serving` reads."""
+    import yaml
+
+    from fastserve.serving.ablation import expand
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    return {**config, "servers": expand(config)}
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m8_server(name: str, config_path: str, git: dict) -> list[dict]:
+    """One server of the M8 plan through every workload it runs."""
+    import yaml
+
+    hf_cache.reload()
+
+    from fastserve.experiments.m2 import run_serving
+    from fastserve.results import to_plain
+
+    config = _m8_config(config_path)
+    workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
+    records = run_serving(config, workloads, git=git, config_path=config_path, only=[name])
+    hf_cache.commit()  # downloaded checkpoints and drafters, and compile caches, for the next container
+    return to_plain(records)
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=30 * 60, volumes={CACHE: hf_cache})
+def m8_smoke(name: str, config_path: str) -> dict:
+    """Does this combination start at all? One short request, the server's own settings, nothing timed."""
+    import json as _json
+    import urllib.request
+
+    hf_cache.reload()
+
+    import urllib.error
+
+    from fastserve.engine.loader import checkpoint_dir, model_dir
+    from fastserve.experiments.m2 import _from_log, _speculative_args
+    from fastserve.serving.server import VLLMServer
+
+    entry = next(s for s in _m8_config(config_path)["servers"] if s["name"] == name)
+    model = entry["model"]
+    path = checkpoint_dir(entry["path"]) if entry.get("path") else model_dir(model)
+    args = [*entry["args"], *_speculative_args(entry.get("speculative"))]
+    server = VLLMServer(path, served_name=model, extra_args=args)
+    try:
+        server.start()
+    except (RuntimeError, TimeoutError) as err:
+        return {"name": name, "error": str(err).splitlines()[0], "log": server.log_tail(60)}
+    with server:
+        messages = [{"role": "user", "content": "Write a Python function that reverses a string."}]
+        payload = {"model": model, "messages": messages, "max_tokens": 64, "temperature": 0}
+        request = urllib.request.Request(
+            f"{server.url}/v1/chat/completions",
+            data=_json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                body = _json.loads(response.read())
+        except urllib.error.HTTPError as err:  # the server is up but refused the request: say why
+            reason = err.read().decode(errors="replace")[:600]
+            return {"name": name, "error": f"HTTP {err.code}: {reason}", "log": server.log_tail(40)}
+        with urllib.request.urlopen(f"{server.url}/metrics", timeout=30) as response:
+            metrics = response.read().decode()
+        spec = [line for line in metrics.splitlines() if "spec_decode" in line and not line.startswith("#")]
+        hf_cache.commit()
+        return {
+            "name": name,
+            "startup_s": server.startup_s,
+            "text": body["choices"][0]["message"]["content"][:200],
+            "settings": _from_log(server),
+            "spec_counters": spec[:8],
+        }
+
+
 def _m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     import yaml
 
@@ -1316,3 +1393,44 @@ def m7(config: str = "benchmarks/configs/m7_kernels.yaml", only: str = "") -> No
             )
         except Exception as err:  # keep what the other containers produced
             print(f"{what} FAILED: {type(err).__name__}: {err}", flush=True)
+
+
+@app.function(cpu=1, memory=1024, timeout=5 * 60)
+def m8_plan(config_path: str) -> list[dict]:
+    """The plan's servers (name, label, model), expanded where the config and PyYAML live."""
+    return [{k: s[k] for k in ("name", "label", "model")} for s in _m8_config(config_path)["servers"]]
+
+
+@app.local_entrypoint()
+def m8(config: str = "benchmarks/configs/m8_ablation.yaml", only: str = "", check: bool = False) -> None:
+    """M8: every server of the ablation plan, one container each, results appended as they finish.
+
+    `--only 1.7b-base,1.7b-wkps` picks servers by name. `--check` only verifies that the picked combinations
+    start and answer one request (nothing is timed or recorded).
+    """
+    from fastserve.results import append_jsonl, git_info, make_record, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"] and not check:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    picked = set(only.split(",")) if only else None
+    names = [s["name"] for s in m8_plan.remote(config) if picked is None or s["name"] in picked]
+    if check:
+        for result in m8_smoke.map(names, kwargs={"config_path": config}):
+            print(json.dumps(result, indent=2)[:3000], flush=True)
+        return
+    out = REPO / "results" / "raw" / "m8_ablation.jsonl"
+    calls = [(name, m8_server.spawn(name, config, git)) for name in names]
+    for name, call in calls:
+        try:
+            print(
+                f"{name}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}",
+                flush=True,
+            )
+        except Exception as err:  # keep what the other containers produced, and record the failure
+            message = f"{type(err).__name__}: {str(err)[:1500]}"
+            failure = make_record(
+                "m8_failure", {"name": name, "error": message}, run_id=new_run_id(), git=git
+            )
+            append_jsonl(out, [failure])
+            print(f"{name} FAILED: {message[:600]}", flush=True)
