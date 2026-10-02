@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("torch")
 
-from fastserve.experiments.m2 import _from_log  # noqa: E402
+from fastserve.experiments.m2 import _from_log, cuda_graphs  # noqa: E402
 
 LOG = """\
 INFO 10-01 12:00:01 [gpu_model_runner.py:1234] Model loading took 0.7512 GiB and 3.20 seconds
@@ -40,3 +40,31 @@ def test_missing_lines_are_none(tmp_path):
     path.write_text("nothing useful\n", encoding="utf-8")
     facts = _from_log(FakeServer(path))
     assert facts["kv_cache_tokens"] is None and facts["kernels"] == []
+
+
+BARS = (
+    "Capturing CUDA graphs (PIECEWISE):  98%|#########8| 50/51 [00:06<00:00,  8.07it/s]\r"
+    "Capturing CUDA graphs (PIECEWISE): 100%|##########| 51/51 [00:07<00:00,  7.18it/s]\n"
+    "Capturing CUDA graphs (FULL): 100%|##########| 2/2 [00:00<00:00, 11.97it/s]\n"  # the memory profiler
+    "Capturing CUDA graphs (FULL):  94%|#########4| 33/35 [00:01<00:00, 20.20it/s]\r"
+    "Capturing CUDA graphs (FULL): 100%|##########| 35/35 [00:01<00:00, 19.63it/s]\n"
+    "Capturing decode CUDA graphs (FULL): 100%|##########| 35/35 [00:00<00:00, 50.17it/s]\n"
+)
+WARNING = (
+    "WARNING 10-02 07:41:52 [compilation.py:1473] CUDAGraphMode.FULL_AND_PIECEWISE is not supported with "
+    "spec-decode for attention backend FlashInferBackend (support: "
+    "AttentionCGSupport.UNIFORM_SINGLE_TOKEN_DECODE); setting cudagraph_mode=PIECEWISE\n"
+)
+
+
+def test_captured_graphs_are_counted_per_kind():
+    graphs = cuda_graphs(BARS)
+    assert graphs == {"captured": {"piecewise": 51, "full": 35, "decode full": 35}, "fallback": None}
+
+
+def test_a_fallback_keeps_vllms_own_words():
+    graphs = cuda_graphs(WARNING + BARS.split("\n")[0] + "\n")  # only the piecewise bar: no full graph
+    assert graphs["captured"] == {"piecewise": 51}
+    assert graphs["fallback"].startswith("CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode")
+    assert graphs["fallback"].endswith("setting cudagraph_mode=PIECEWISE")
+    assert cuda_graphs("nothing useful") == {"captured": {}, "fallback": None}

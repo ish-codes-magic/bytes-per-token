@@ -352,9 +352,11 @@ def m8_smoke(name: str, config_path: str) -> dict:
         hf_cache.commit()
         return {
             "name": name,
+            "label": entry["label"],
+            "model": model,
             "startup_s": server.startup_s,
             "text": body["choices"][0]["message"]["content"][:200],
-            "settings": _from_log(server),
+            "settings": _from_log(server),  # includes which CUDA graphs vLLM captured
             "spec_counters": spec[:8],
         }
 
@@ -714,6 +716,27 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
     from importlib.metadata import version
     from pathlib import Path
 
+    if topic == "cudagraph":  # M8: which attention backends vLLM can capture in a full CUDA graph, and when
+        import vllm
+
+        root = Path(vllm.__file__).parent
+        lines = [f"vllm {version('vllm')}"]
+        backend = (root / "v1" / "attention" / "backend.py").read_text(encoding="utf-8")
+        start = backend.find("class AttentionCGSupport")
+        lines.append(backend[start : start + 700] if start >= 0 else "AttentionCGSupport not in backend.py")
+        # what each backend declares, with the lines around it (the conditions are what matter)
+        for name in ("flash_attn.py", "flashinfer.py"):
+            text = (root / "v1" / "attention" / "backends" / name).read_text(encoding="utf-8")
+            for match in re.finditer(r"_cudagraph_support = \(|def get_cudagraph_support", text):
+                begin = text.rfind("\n", 0, max(match.start() - 500, 0)) + 1
+                lines.append(f"---- {name} ----\n{text[begin : match.start() + 1500]}")
+        # how the runner turns the weakest backend's support into a CUDA graph mode
+        runner = (root / "v1" / "worker" / "gpu_model_runner.py").read_text(encoding="utf-8")
+        for match in list(re.finditer(r"min_cg_support", runner))[:1]:
+            lines.append(
+                f"---- gpu_model_runner.py ----\n{runner[match.start() - 400 : match.start() + 3600]}"
+            )
+        return "\n".join(lines)
     if topic == "ops":  # M7: the norm and quantization ops our kernels compete with, and vLLM's fusion pass
         import vllm
 
@@ -1467,12 +1490,14 @@ def m8(
     only: str = "",
     check: bool = False,
     quality: str = "",
+    graphs: bool = False,
 ) -> None:
     """M8: every server of the ablation plan, one container each, results appended as they finish.
 
     `--only 1.7b-base,1.7b-wkps` picks servers by name. `--check` only verifies that the picked combinations
     start and answer one request (nothing is timed or recorded). `--quality perplexity,needle,tasks` runs
-    the quality tasks for FP8 weights + FP8 KV instead of the servers.
+    the quality tasks for FP8 weights + FP8 KV instead of the servers. `--graphs` starts the picked servers
+    only to record which CUDA graphs vLLM captured (the servers that ran before this was logged).
     """
     from fastserve.results import append_jsonl, git_info, make_record, new_run_id
 
@@ -1486,6 +1511,18 @@ def m8(
             print(json.dumps(result, indent=2)[:3000], flush=True)
         return
     out = REPO / "results" / "raw" / "m8_ablation.jsonl"
+    if graphs:
+        run_id, records = new_run_id(), []
+        for result in m8_smoke.map(names, kwargs={"config_path": config}):
+            if "error" in result:
+                print(f"{result['name']} FAILED: {result['error']}", flush=True)
+                continue
+            metrics = {k: result[k] for k in ("name", "label", "model")}
+            metrics |= {k: result["settings"][k] for k in ("attention_backend", "cuda_graphs")}
+            records.append(make_record("m8_graphs", metrics, run_id=run_id, git=git))
+            print(f"{result['name']}: {result['settings']['cuda_graphs']}", flush=True)
+        print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}")
+        return
     if quality:
         run_id, models = new_run_id(), load_config.remote(config)["quality"]["models"]
         kinds = quality.split(",")

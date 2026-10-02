@@ -30,10 +30,33 @@ _FROM_LOG = {
     "kv_cache_memory_gib": (re.compile(r"Available KV cache memory: ([\d.]+) ?GiB"), float),
     # M5: how many full-length requests fit at once, which attention kernel runs, and the cache's dtype
     "max_concurrency": (re.compile(r"Maximum concurrency for [\d,]+ tokens per request: ([\d.]+)x"), float),
-    "attention_backend": (re.compile(r"Using (\S+?) (?:attention )?backend", re.I), str),
+    # (an explicit --attention-backend is printed as "AttentionBackendEnum.FLASHINFER")
+    "attention_backend": (
+        re.compile(r"Using (?:AttentionBackendEnum\.)?(\S+?) (?:attention )?backend", re.I),
+        str,
+    ),
     "kv_cache_dtype": (re.compile(r"Using (\S+) data type to store kv cache", re.I), str),
 }
 _KERNEL = re.compile(r"(Using \S*Kernel\S* for \S+|Selected \S*Kernel\S* for \S+)")
+# M8: which CUDA graphs were captured (progress bars that reached N/N), and vLLM's warning when the
+# attention backend cannot be captured in a full graph for this kind of batch
+_GRAPHS = re.compile(r"Capturing ((?:prefill |decode )?)CUDA graphs \((\w+)\):\s+100%[^\r\n]*?\b(\d+)/\3\b")
+_FALLBACK = re.compile(r"(CUDAGraphMode\.\w+ is not supported[^\r\n]*?setting cudagraph_mode=\w+)")
+
+
+def cuda_graphs(log: str) -> dict[str, Any]:
+    """The CUDA graphs vLLM captured at startup, counted per kind, and its warning if it had to fall back.
+
+    A full graph replays a whole forward pass as one launch. A piecewise graph covers the layers between
+    attention calls, and attention runs from Python in between. With speculative decoding the drafter's
+    graphs are printed too ("prefill full", "decode full").
+    """
+    captured: dict[str, int] = {}
+    for who, mode, count in _GRAPHS.findall(log):
+        kind = f"{who}{mode}".lower()
+        captured[kind] = max(captured.get(kind, 0), int(count))  # the memory profiler captures a few first
+    fallback = _FALLBACK.search(log)
+    return {"captured": captured, "fallback": fallback.group(1) if fallback else None}
 
 
 def _from_log(server: VLLMServer) -> dict[str, Any]:
@@ -43,6 +66,7 @@ def _from_log(server: VLLMServer) -> dict[str, Any]:
         match = pattern.search(log)
         found[key] = cast(match.group(1).replace(",", "")) if match else None
     found["kernels"] = sorted(set(_KERNEL.findall(log)))
+    found["cuda_graphs"] = cuda_graphs(log)
     return found
 
 
