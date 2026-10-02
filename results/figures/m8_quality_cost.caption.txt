@@ -1,0 +1,1 @@
+The cheapest measured configuration on the busy workload, `aps`, costs 1.49× less than stock BF16 for a perplexity change of +10.1%; without INT4 weights the cheapest is `wps` at 1.46× and +0.0%. 4 of 18 configurations are on the frontier.

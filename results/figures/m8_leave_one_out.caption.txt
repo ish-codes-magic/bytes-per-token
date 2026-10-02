@@ -1,0 +1,1 @@
+In 7 of 16 cases the full stack is faster *without* a technique. The largest: removing FP8 KV cache on latency makes the stack 1.99× faster, although alone it gives 0.97×.

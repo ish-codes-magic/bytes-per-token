@@ -1,0 +1,1 @@
+The M8-informed model's recommendation for Qwen3-1.7B, FP8-class quality only: `wks` in 70% of the cells, `ws` in 30% of the cells. It names the fastest measured stack on 3 of the 4 measured workloads (★); everywhere else the map is a prediction.
