@@ -30,12 +30,12 @@ plan:
     factorial: [w, k, p, s]      # all 16 combinations: the ladder, leave-one-out, and every pair
     combos: [wf, a, akps]        # the FlashInfer control for the KV step; the INT4 branch, alone and full
     controls: [fs, g, sg, aps]   # why k and s collide (fs, g, sg); the INT4 branch without the collision
-    controls2: [f, fg]           # second round: is FlashInfer slow outside a full graph, or on multi-token passes?
+    controls2: [f, fg, wg]       # second round: FlashInfer alone, in and out of the full graph; fourth: FP8 + piecewise
     repeats: [base, wkps]        # run twice: how much two identical servers differ
     ladder: [base, w, wf, wk, wkp, wkps, akps]
   Qwen/Qwen3-0.6B:
     combos: [base, w, wf, wk, wkp, wkps, kps, wps, wks]   # the ladder, and leave-one-out
-    controls: [wg, wsg]         # third round: piecewise graphs on FlashAttention, where the GPU's pass is short
+    controls: [wg, wsg, g]      # third round: piecewise graphs where the GPU's pass is short; fourth: with BF16 weights
     ladder: [base, w, wf, wk, wkp, wkps]
 
 loads:
