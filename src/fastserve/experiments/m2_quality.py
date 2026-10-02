@@ -55,7 +55,7 @@ def tasks_task(model_path: str, cfg: dict[str, Any]) -> dict[str, Any]:
     from fastserve.quality.tasks import DEFAULT_SUITE, run_suite
 
     suite = [tuple(t) for t in cfg["suite"]] if cfg.get("suite") else DEFAULT_SUITE
-    return {"scores": run_suite(model_path, suite)}
+    return {"scores": run_suite(model_path, suite, kv_cache_dtype=cfg.get("kv_cache_dtype"))}
 
 
 TASKS = {"perplexity": perplexity_task, "needle": needle_task, "tasks": tasks_task}

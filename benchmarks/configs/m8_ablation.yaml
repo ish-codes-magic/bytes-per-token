@@ -43,3 +43,16 @@ loads:
   long_32k:                      # one user, 32k tokens: the KV read dominates each step
     - {mode: closed, concurrency: 1}
 only_for: {long_32k: ladder}     # workloads that only the servers in this plan list run
+
+# ---- quality of the lossy part of the stack, in vLLM: FP8 weights + FP8 KV (label wk) --------------------
+# Prefix caching does not change outputs, and speculative decoding is lossless in distribution (M6).
+# Baselines: BF16 (M2's suite and needle grid, M4's perplexity), FP8 weights (M4), FP8 KV (M5).
+quality:
+  label: wk
+  path: "ishita-codes-ai/{model}-FP8-Dynamic"
+  kv_cache_dtype: fp8
+  models: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B]
+  perplexity: {window: 2048, max_windows: 40}
+  needle: {max_model_len: 34000, lengths: [1024, 4096, 8192, 16384, 32000], depths: [0.0, 0.25, 0.5, 0.75, 1.0],
+           secrets: ["4729", "8136", "2051"]}
+  tasks: {}                      # the M2 suite: GSM8K, an MMLU slice, HumanEval

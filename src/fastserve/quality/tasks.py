@@ -17,18 +17,26 @@ DEFAULT_SUITE = [
 ]
 
 
-def _model_args(model_path: str, max_model_len: int) -> dict[str, Any]:
-    """The same vLLM settings for every configuration, so scores differ only by the checkpoint."""
-    return {
+def _model_args(model_path: str, max_model_len: int, kv_cache_dtype: str | None = None) -> dict[str, Any]:
+    """The same vLLM settings for every configuration, so scores differ only by the checkpoint (and, in
+    M8, by the KV cache's format)."""
+    args = {
         "pretrained": model_path,
         "dtype": "bfloat16",
         "gpu_memory_utilization": 0.8,
         "max_model_len": max_model_len,
     }
+    if kv_cache_dtype:
+        args["kv_cache_dtype"] = kv_cache_dtype
+    return args
 
 
 def run_suite(
-    model_path: str, suite: list[tuple] | None = None, *, max_model_len: int = 4096
+    model_path: str,
+    suite: list[tuple] | None = None,
+    *,
+    max_model_len: int = 4096,
+    kv_cache_dtype: str | None = None,
 ) -> dict[str, Any]:
     """Run each task and return {task: {"score": ..., "stderr": ..., "metric": ..., "n": ...}}."""
     import lm_eval
@@ -39,7 +47,7 @@ def run_suite(
     for task, shots, limit, metric in suite or DEFAULT_SUITE:
         out = lm_eval.simple_evaluate(
             model="vllm",
-            model_args=_model_args(model_path, max_model_len),
+            model_args=_model_args(model_path, max_model_len, kv_cache_dtype),
             tasks=[task],
             num_fewshot=shots,
             limit=limit,

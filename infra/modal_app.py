@@ -359,6 +359,28 @@ def m8_smoke(name: str, config_path: str) -> dict:
         }
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=90 * 60, volumes={CACHE: hf_cache})
+def m8_quality(kind: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """FP8 weights + FP8 KV in vLLM: WikiText-2 perplexity, the needle grid, or the task suite."""
+    import yaml
+
+    hf_cache.reload()
+
+    from fastserve.engine.loader import checkpoint_dir
+    from fastserve.experiments.m2_quality import needle_task, tasks_task, vllm_perplexity_task
+    from fastserve.results import environment_info, make_record, to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))["quality"]
+    cfg = {**config[kind], "kv_cache_dtype": config["kv_cache_dtype"]}
+    path = checkpoint_dir(config["path"].format(model=model.split("/")[-1]))
+    task = {"perplexity": vllm_perplexity_task, "needle": needle_task, "tasks": tasks_task}[kind]
+    metrics = {"model": model, "label": config["label"], **task(path, cfg)}
+    meta = {"path": config_path, kind: cfg}
+    record = make_record(f"m8_{kind}", metrics, run_id=run_id, config=meta, git=git, env=environment_info())
+    hf_cache.commit()
+    return to_plain([record])
+
+
 def _m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     import yaml
 
@@ -1402,11 +1424,17 @@ def m8_plan(config_path: str) -> list[dict]:
 
 
 @app.local_entrypoint()
-def m8(config: str = "benchmarks/configs/m8_ablation.yaml", only: str = "", check: bool = False) -> None:
+def m8(
+    config: str = "benchmarks/configs/m8_ablation.yaml",
+    only: str = "",
+    check: bool = False,
+    quality: str = "",
+) -> None:
     """M8: every server of the ablation plan, one container each, results appended as they finish.
 
     `--only 1.7b-base,1.7b-wkps` picks servers by name. `--check` only verifies that the picked combinations
-    start and answer one request (nothing is timed or recorded).
+    start and answer one request (nothing is timed or recorded). `--quality perplexity,needle,tasks` runs
+    the quality tasks for FP8 weights + FP8 KV instead of the servers.
     """
     from fastserve.results import append_jsonl, git_info, make_record, new_run_id
 
@@ -1420,7 +1448,16 @@ def m8(config: str = "benchmarks/configs/m8_ablation.yaml", only: str = "", chec
             print(json.dumps(result, indent=2)[:3000], flush=True)
         return
     out = REPO / "results" / "raw" / "m8_ablation.jsonl"
-    calls = [(name, m8_server.spawn(name, config, git)) for name in names]
+    if quality:
+        run_id, models = new_run_id(), load_config.remote(config)["quality"]["models"]
+        kinds = quality.split(",")
+        calls = [
+            (f"{kind} {model}", m8_quality.spawn(kind, model, config, run_id, git))
+            for model in models
+            for kind in kinds
+        ]
+    else:
+        calls = [(name, m8_server.spawn(name, config, git)) for name in names]
     for name, call in calls:
         try:
             print(
