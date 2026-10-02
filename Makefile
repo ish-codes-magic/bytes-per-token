@@ -2,7 +2,7 @@
 # (No `make` on Windows? Run the commands after each target name directly.)
 MODAL := uv run --only-group local modal run infra/modal_app.py
 
-.PHONY: setup lint format test test-gpu probe bench-baseline quality-baseline figures docs
+.PHONY: setup lint format test test-gpu probe bench-baseline quality-baseline bench-kernels figures docs
 
 setup:
 	uv sync --only-group local
@@ -32,6 +32,9 @@ bench-baseline:  # M2: the load sweep, vLLM's offline engine, and the saturation
 
 quality-baseline:  # M2: perplexity, lm-eval tasks and the needle grid, one container per (task, model)
 	$(MODAL)::m2q
+
+bench-kernels:  # M7: profile, both kernels' microbenchmarks, nanoserve end to end, quality (7 containers)
+	$(MODAL)::m7
 
 figures:
 	$(MODAL)::figures

@@ -11,6 +11,7 @@ From the repo root (the laptop's venv holds only `modal` and `ruff`):
     uv run --only-group local modal run infra/modal_app.py::m2          # M2 vLLM serving baselines
     uv run --only-group local modal run infra/modal_app.py::m2q         # M2 quality baselines
     uv run --only-group local modal run infra/modal_app.py::m3          # M3 quantization from scratch
+    uv run --only-group local modal run infra/modal_app.py::m7          # M7 custom Triton kernels
 
 The container image is built in the cloud from pyproject.toml + uv.lock and cached after the first build.
 Every function has a timeout, so a hung job can never eat the month's free credit.
