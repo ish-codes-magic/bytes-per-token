@@ -1019,6 +1019,7 @@ def m8_records() -> list[dict[str, Any]]:
         "s": {"m8_latency": 1.6, None: 1.2},
         "f": {"capacity": 1.1, None: 1.0},
         "a": {"m8_latency": 2.0, None: 1.2},
+        "g": {None: 0.9},  # control: piecewise CUDA graphs only
     }
 
     def rate(label: str, workload: str) -> float:
@@ -1028,6 +1029,8 @@ def m8_records() -> list[dict[str, Any]]:
             tok_s *= gain[letter].get(workload, gain[letter].get(None, 1.0))
         if "w" in on and "s" in on:
             tok_s *= 0.9  # the one pair that competes
+        if "f" in on and "s" in on:
+            tok_s *= 0.75  # the control that shows a backend colliding with speculation
         return tok_s * {"base-r2": 1.02, "wkps-r2": 0.97}.get(label, 1.0)
 
     ladder = ("base", "w", "wf", "wk", "wkp", "wkps", "akps")
@@ -1041,13 +1044,20 @@ def m8_records() -> list[dict[str, Any]]:
         "finished",
         "cached_tokens",
     ]
-    for label in [*factorial(["w", "k", "p", "s"]), "wf", "a", "akps", "base-r2", "wkps-r2"]:
+    plan = [*factorial(["w", "k", "p", "s"]), "wf", "a", "akps", "fs", "g", "sg", "aps"]
+    for label in [*plan, "base-r2", "wkps-r2"]:
         on = letters(label)
         start = {"label": label, "model": model, "kv_cache_tokens": 300_000 if "k" in on else 150_000}
-        add(
-            "server_start",
-            {**start, "attention_backend": "FLASHINFER" if set(on) & {"k", "f"} else "FLASH_ATTN"},
-        )
+        flashinfer = bool(set(on) & {"k", "f"})
+        piecewise = "g" in on or (flashinfer and "s" in on)
+        graphs = {
+            "captured": {"piecewise": 51} if piecewise else {"piecewise": 51, "full": 35},
+            "fallback": "CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode"
+            if flashinfer and "s" in on
+            else None,
+        }
+        backend = "FLASHINFER" if flashinfer else "FLASH_ATTN"
+        add("server_start", {**start, "attention_backend": backend, "cuda_graphs": graphs})
         for workload, tok_s in base.items():
             if workload == "long_32k" and label not in ladder:
                 continue

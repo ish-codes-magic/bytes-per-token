@@ -93,14 +93,57 @@ def test_frozen_predictions_are_scored_against_what_ran(m8_records):
 def test_cost_and_quality(m8_records, m5_records, m4_records):
     m2_quality = []  # no BF16 baseline scores in this test: those cells are dashes
     cost = m8.cost_table(m8_records, dollars_per_hour=0.8)
-    assert (
-        "| Qwen3-1.7B | Latency (1 user, real prompts) | 2.22 | 1.03 | 2.16× | 0.69 |" in cost
-    )  # INT4: 320 tok/s
+    row = (
+        "| Qwen3-1.7B | Multi-turn (8 users, shared prefixes) | 1.11 | 0.37 | 2.97× | `wkps` | 0.37 | 2.97× |"
+    )
+    assert row in cost
     quality = m8.quality_table(m8_records, m5_records, m4_records, m2_quality)
     assert "| Qwen3-1.7B | FP8 weights + FP8 KV (`wk`) | 20.40 | 100% | 50.0 | 60.0 | 30.0 |" in quality
     assert (
         "| Qwen3-0.6B | FP8 weights + FP8 KV (`wk`) | — | — | — | — | — |" in quality
     )  # not measured: dashes
+
+
+def test_the_best_stack_is_chosen_among_deployable_servers(m8_records):
+    assert "fs" not in m8.candidates(m8_records, LARGE) and "g" not in m8.candidates(m8_records, LARGE)
+    assert "aps" in m8.candidates(m8_records, LARGE)
+    assert "aps" not in m8.candidates(m8_records, LARGE, allow_int4=False)
+    assert all(not label.endswith("-r2") for label in m8.candidates(m8_records, LARGE))
+    label, rate = m8.best(m8_records, LARGE, "multi_turn", allow_int4=False)
+    assert label == "wkps" and rate == pytest.approx(200 * 1.25 * 1.1 * 2.0 * 1.2 * 0.9)
+    assert m8.best(m8_records, LARGE, "multi_turn")[0] == "akps"  # INT4 does not compete with speculation
+    assert m8.best(m8_records, "no/model", "multi_turn") is None
+    table = m8.best_table(m8_records, LARGE, {"": 20.0, "w": 20.2, "wk": 20.4})
+    assert (
+        "| Multi-turn (8 users, shared prefixes) | 200 | 2.97× | `wkps` | 2.97× | +2.0% | `akps` | 3.17× |"
+        in table
+    )
+    assert "| Long (1 user, 32k tokens) | 10 | 1.62× | `wkps` | 1.62× | +2.0% | `akps` | 1.73× |" in table
+    assert "| `wkps` | 1.62× | — | `akps` |" in m8.best_table(m8_records, LARGE)  # no perplexity given
+
+
+def test_the_collision_table_puts_controls_next_to_what_they_explain(m8_records):
+    assert m8.graph_mode(m8.graphs_of(m8_records, LARGE, "base")) == "full"
+    assert m8.graph_mode(m8.graphs_of(m8_records, LARGE, "ks")) == "piecewise"
+    assert m8.graph_mode(None) == "—"
+    assert m8.fallback_message(m8_records, LARGE, "fs").startswith("CUDAGraphMode.FULL_AND_PIECEWISE")
+    assert m8.fallback_message(m8_records, LARGE, "s") is None
+    assert m8.pass_ms(m8_records, LARGE, "base") == pytest.approx(10.0)
+    assert m8.pass_ms(m8_records, LARGE, "fs") == pytest.approx(2 * 1e3 / 120)  # two tokens per pass
+    table = m8.collision_table(m8_records, LARGE)
+    assert "| `base` | stock | FLASH_ATTN | full | 100 | 1.00 | 10.0 | 70 | 2,000 |" in table
+    name = "speculation on FlashInfer, BF16 cache (control)"
+    assert f"| `fs` | {name} | FLASHINFER | piecewise | 120 | 2.00 | 16.7 | 70 | 1,800 |" in table
+    assert (
+        "| `sg` | speculation, piecewise graphs only (control) | FLASH_ATTN | piecewise | 144 | 2.00 | 13.9 |"
+        in table
+    )
+    observed = m8.control_observables(m8_records)
+    assert observed["control_fs_vs_ks_latency"] == pytest.approx(0.75)
+    assert observed["control_sg_latency"] == pytest.approx(0.9)
+    assert observed["control_g_busy"] == pytest.approx(0.9)
+    assert observed["control_aps_latency"] == pytest.approx(3.2)
+    assert observed["control_aps_multi_turn"] == pytest.approx(1.2 * 2.0 * 1.2)
 
 
 def test_observables(m8_records, m4_records):
