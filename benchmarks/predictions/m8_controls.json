@@ -1,0 +1,15 @@
+{
+  "milestone": "M8",
+  "written_in_commit": null,
+  "note": "Written after M8's 30 planned servers ran and before any control server was timed (a startup check of the four controls timed nothing). The planned results showed FP8 KV and speculative decoding losing to either alone at one user, and vLLM's startup log said why it might: on this GPU FlashInfer can capture a full CUDA graph only for single-token decodes, so with speculation vLLM falls back to piecewise graphs. The controls separate three possible causes: the FP8 bytes, the piecewise graphs, and FlashInfer's own multi-token path. Letters as in m8.json, plus f = FlashInfer on a BF16 cache and g = piecewise CUDA graphs only. Qwen3-1.7B, output tokens/s ratios.",
+  "predictions": [
+    {"id": "control_fs_vs_ks_latency", "label": "FlashInfer + speculation on a BF16 cache ÷ FP8 KV + speculation, latency (fs ÷ ks): 1.0 means the FP8 bytes are not the cause", "low": 0.9, "high": 1.1},
+    {"id": "control_fs_latency", "label": "FlashInfer + speculation ÷ speculation alone, latency (fs ÷ s)", "low": 0.7, "high": 0.85},
+    {"id": "control_sg_latency", "label": "Speculation with piecewise graphs only, on FlashAttention ÷ speculation alone, latency (sg ÷ s): near 0.75 means the graph mode is the whole cause", "low": 0.84, "high": 0.96},
+    {"id": "control_g_latency", "label": "Piecewise graphs only ÷ base, latency (g ÷ base)", "low": 0.82, "high": 0.95},
+    {"id": "control_g_busy", "label": "Piecewise graphs only ÷ base, busy (g ÷ base): longer steps hide the same host time", "low": 0.92, "high": 1.0},
+    {"id": "control_fs_busy", "label": "FlashInfer + speculation ÷ speculation alone, busy (fs ÷ s)", "low": 0.8, "high": 0.95},
+    {"id": "control_aps_latency", "label": "INT4 weights + prefix caching + speculation on latency (aps ÷ base): the INT4 branch without the collision", "low": 2.6, "high": 3.3},
+    {"id": "control_aps_multi_turn", "label": "INT4 weights + prefix caching + speculation on multi-turn (aps ÷ base)", "low": 2.5, "high": 3.2}
+  ]
+}

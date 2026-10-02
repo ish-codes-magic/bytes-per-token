@@ -411,3 +411,54 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
     is labeled as one.
 - **Still open from earlier:** the rest of M4's INT8 gap; the INT4 drafter that is slower inside vLLM's
   speculative loop (M6), which M7's profiling did not reach.
+
+### M8: the full stack
+
+- **M7 gate decisions (from the human).** Custom kernels are reported as a nanoserve measurement plus a
+  labeled vLLM projection; no vLLM backend is written. M0's and M1's cold timings are not re-measured: the
+  write-flush bias stays documented where those numbers are used. Tagged `v0.7-custom-kernels`.
+- **Checkpoints published.** Eight repos under `ishita-codes-ai/` (FP8-Dynamic, W8A8-INT8, W4A16-GPTQ,
+  W4A16-AWQ, for both models), each file's hash checked against the Volume copy before that copy was
+  deleted. The M4–M6 configs now name the Hub ids. The token is read inside the container from the Modal
+  secret `huggingface-secret` and is never printed or returned.
+- **Caught by the startup check: a server that could not answer.** The first published-checkpoint server
+  returned HTTP 400 on a chat request. The loader's filtered download fetched only the files nanoserve reads
+  and skipped `chat_template.jinja`. Servers now take the whole snapshot (`checkpoint_dir`). Nothing had
+  been timed.
+- **Plan.** Techniques are letters: `w` FP8 weights, `a` INT4 (AWQ) weights, `f` FlashInfer on a BF16 cache
+  (control), `k` FP8 KV, `p` prefix caching, `s` speculative decoding (EAGLE-3 head, k = 3). A label is the
+  letters that are on. Qwen3-1.7B runs the full 2⁴ factorial of w, k, p, s (ladder, leave-one-out and every
+  pair in one design), plus `wf`, `a`, `akps`, and repeats of `base` and `wkps`. Qwen3-0.6B runs the ladder
+  and leave-one-out. 30 servers, five workloads.
+- **The serving model was built and frozen first** (`perfmodel/serving.py`, calibrated on M2–M6 only).
+  - 182 earlier points: median error 3.4%, 94% within 15%. 101 of them were not used to fit: 4.5%.
+  - Not modeled: servers with a separate draft model (42 points, 55% off).
+  - What fitting it taught, each one a mistake first:
+    - Tokens per target pass must count every pass, including those that accept nothing: G ÷ (G − A).
+    - A prefill that rides in a decode step does not pay for its own read of the weights.
+    - A closed-loop client's "64 users" are not 64 running sequences; in-flight requests are measured.
+    - A prefix shared by a batch is read from L2 after the first sequence, if one layer's slice fits.
+  - Predictions for all 30 servers: `benchmarks/predictions/m8_model.json`; 32 hand-ranged claims in
+    `m8.json`. Both committed before any server ran.
+- **Pilot (`1.7b-base`).** Latency 67 tok/s, busy 1,955, capacity 256, multi-turn 199, long 10. GPU power
+  is ≈ 72 W (the L4's limit) on every workload, one user included: a decode step keeps the GPU at its
+  power limit even when it is far from its FLOP limit.
+- **All 30 servers ran; none failed.** Quality of `wk` (the lossy part of the stack) measured in vLLM.
+- **Surprise: the full stack is not the best stack.** On Qwen3-1.7B at one user: `ws` 151 tok/s, `wkps` 76
+  (base 67). On Qwen3-0.6B the full stack is *slower than stock*: 80 tok/s against 168.
+  - Every server with both `k` and `s` is slow, at one user by 25–75%: `ks` 85 against `s` 113 and `k` 65.
+  - The serving model is within ~13% on every 1.7B server without that pair, and 35–110% high with it.
+  - Tokens kept per pass are the same with and without `k` (2.1): the drafter is not worse.
+  - GPU power on those servers falls to 46–58 W. The GPU is waiting for the host.
+- **Hypothesis, from vLLM's startup log.** `--kv-cache-dtype fp8` forces FlashInfer on an L4 (M5). With
+  speculation, vLLM 0.30 prints: "CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode for
+  attention backend FlashInferBackend (support: AttentionCGSupport.UNIFORM_SINGLE_TOKEN_DECODE); setting
+  cudagraph_mode=PIECEWISE". So `ks` runs without a full CUDA graph: every attention call is made from
+  Python. This is the third lever in reverse: waste between bytes and math.
+- **Controls added to the plan, predictions first** (`benchmarks/predictions/m8_controls.json`):
+  - `fs`: FlashInfer with speculation on a BF16 cache. If the FP8 bytes are innocent, `fs` ≈ `ks`.
+  - `g`, `sg`: FlashAttention with piecewise graphs only. If the graph mode is the whole cause,
+    `sg` ÷ `s` ≈ 0.75. I expect 0.84–0.96: losing the graph costs some host time per layer, and the rest is
+    FlashInfer's own multi-token path (it treats a 4-token decode as a prefill and plans it on the host).
+  - `aps`: the INT4 branch without the collision, the candidate for the best one-user stack.
+  - Server starts now record which CUDA graphs were captured (`cuda_graphs` in `server_start`).

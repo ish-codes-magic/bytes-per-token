@@ -72,7 +72,7 @@ def test_the_real_plan_is_one_change_at_a_time():
     path = Path(__file__).parents[2] / "benchmarks" / "configs" / "m8_ablation.yaml"
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     servers = expand(config)
-    assert len({s["name"] for s in servers}) == len(servers) == 30
+    assert len({s["name"] for s in servers}) == len(servers) == 34  # 30 planned + 4 controls
     large = [s["label"] for s in servers if s["model"] == "Qwen/Qwen3-1.7B"]
     assert set(factorial(["w", "k", "p", "s"])) <= set(large)
     ladder = ["base", "w", "wk", "wkp", "wkps"]

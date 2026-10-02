@@ -19,12 +19,17 @@ techniques:                      # in ladder order
     speculative:
       Qwen/Qwen3-1.7B: {method: eagle3, model: AngelSlim/Qwen3-1.7B_eagle3, num_speculative_tokens: 3}
       Qwen/Qwen3-0.6B: {method: eagle3, model: Nicolassuez/Qwen3-0.6B-eagle3, num_speculative_tokens: 3}
+  # control, added after the first results: FP8 KV with speculation was slower than either alone, and
+  # vLLM's log says FlashInfer cannot capture a full CUDA graph for multi-token decodes on this GPU.
+  # `g` takes the full graph away from FlashAttention; `fs` gives speculation FlashInfer without FP8 bytes.
+  g: {name: piecewise CUDA graphs only, args: [--compilation-config, '{"cudagraph_mode": "PIECEWISE"}']}
 common_args: [--enable-prompt-tokens-details]      # reports cached prompt tokens per request
 
 plan:
   Qwen/Qwen3-1.7B:
     factorial: [w, k, p, s]      # all 16 combinations: the ladder, leave-one-out, and every pair
     combos: [wf, a, akps]        # the FlashInfer control for the KV step; the INT4 branch, alone and full
+    controls: [fs, g, sg, aps]   # why k and s collide (fs, g, sg); the INT4 branch without the collision
     repeats: [base, wkps]        # run twice: how much two identical servers differ
     ladder: [base, w, wf, wk, wkp, wkps, akps]
   Qwen/Qwen3-0.6B:
