@@ -866,3 +866,122 @@ def m6_records() -> list[dict[str, Any]]:
                     metrics["server_timeline"] = timeline
                 add("serving", metrics)
     return records
+
+
+@pytest.fixture
+def m7_records() -> list[dict[str, Any]]:
+    """A hand-made M7 campaign with round ratios: kernel 1 twice as fast as two ops, INT4 10× PyTorch."""
+    records = []
+
+    def add(experiment, metrics, task=""):
+        record = make_record(
+            experiment, metrics, run_id="m7test", env={}, git={"commit": "0" * 16}, config={"task": task}
+        )
+        record["timestamp"] = "2026-10-02T00:00:00+00:00"
+        records.append(record)
+
+    for context, step, attention in ((512, 40.0, 4.0), (32000, 140.0, 100.0)):
+        profile = {"batch": 1, "context": context, "step_ms": step, "attention_ms": attention}
+        profile.update(attention_share=attention / step, kernels=2000, kv_bytes=1e5 * context)
+        add("m7_profile", profile)
+
+    def timed(ms):
+        return {"ms": ms, "timing": {"median_ms": ms}}
+
+    # rows → (two ops, fused FP8, kernel 1) in ms, replayed from a CUDA graph; eager adds a launch cost
+    sizes = {1: (0.004, 0.003, 0.002), 4096: (0.04, 0.16, 0.02), 32768: (2.0, 1.6, 0.8)}
+    for task in ("ops", "norm_quant"):
+        for rows, (separate, fused_fp8, ours) in sizes.items():
+            moved = rows * (2048 * 2 + 2048 + 4)
+            contenders = {
+                "torch": {"bytes_moved": None, "eager": timed(0.3), "graph": timed(0.03)},
+                "vllm-norm": {"bytes_moved": 1, "eager": timed(0.02), "graph": timed(separate / 2)},
+                "vllm-quant": {"bytes_moved": 1, "eager": timed(0.04), "graph": timed(separate / 2)},
+                "vllm-separate": {
+                    "bytes_moved": rows * 2048 * 7,
+                    "eager": timed(separate + 0.056),
+                    "graph": timed(separate),
+                },
+                "vllm-fused-fp8": {"bytes_moved": moved, "eager": timed(0.05), "graph": timed(fused_fp8)},
+            }
+            row = {"rows": rows, "d": 2048, "dtype": "bfloat16", "contenders": contenders}
+            if task == "norm_quant":
+                contenders["triton-fused"] = {
+                    "bytes_moved": moved,
+                    "eager": timed(ours + 0.028),
+                    "graph": timed(ours),
+                }
+                row["vs_reference"] = {"max_code_diff": 1, "codes_differing": 0.0002 if rows > 1 else 0.0}
+                row["vs_vllm"] = {"max_code_diff": 1, "codes_differing": 0.04}
+            add("m7_norm_quant", row, task)
+    for rows in (256, 32768):
+        for warps, ms in ((1, 0.9), (4, 0.3), (8, 0.6)):
+            warp_row = {"rows": rows, "d": 2048, "num_warps": warps, **timed(ms)}
+            add("m7_norm_quant_warps", warp_row, "norm_quant")
+
+    # One layer's attention. Bytes per token and KV head: BF16 512, INT8 276, INT4 148 (8 KV heads).
+    shapes = {(1, 512): 0.1, (1, 32768): 1.0, (16, 2048): 1.0}  # a time scale per shape
+    for (batch, context), unit in shapes.items():
+        tokens = batch * context * 8
+        times = {
+            "sdpa-bf16": (3.5, 512),
+            "flashinfer-fp16": (0.7, 512),
+            "dequant-int4": (35.0, 148),
+            "triton-bf16": (1.0, 512),
+            "triton-int8": (0.7, 276),
+            "triton-int4": (0.35, 148),
+        }
+        contenders = {}
+        for name, (ms, per_token) in times.items():
+            if name.startswith("flashinfer") and batch != 1:
+                continue
+            ms, nbytes = ms * unit, tokens * per_token
+            contenders[name] = {**timed(ms), "cache_bytes": nbytes, "gbps": nbytes / (ms / 1e3) / 1e9}
+            if name.startswith("triton"):
+                contenders[name].update(error_vs_reference=2e-5, error_vs_bf16=0.01, split=512)
+        if context == 512:  # launch-bound: the kernel loses
+            contenders["triton-int4"]["ms"] = 0.5
+        add("m7_attention", {"batch": batch, "context": context, "contenders": contenders}, "attention")
+    add("m7_attention", {"batch": 64, "context": 32768, "skipped": "too many tokens"}, "attention")
+
+    grid = ((32, 1, 1.4), (32, 4, 0.7), (512, 1, 0.5), (512, 4, 0.35), (32768, 1, 4.0), (32768, 4, 3.5))
+    for split, warps, ms in grid:
+        tune = {"batch": 1, "context": 32768, "bits": 4, "split": split, "num_warps": warps}
+        add("m7_tune", {**tune, "programs": 8 * (32768 // split), "cache_bytes": 1, **timed(ms)}, "tune")
+
+    steps = {
+        (1, 512): {"bf16-sdpa": 45.0, "int4-kernel": 50.0},
+        (1, 32000): {
+            "bf16-sdpa": 140.0,
+            "bf16-kernel": 70.0,
+            "int8-kernel": 65.0,
+            "int4-kernel": 56.0,
+            "int4-dequant": 700.0,
+        },
+        (8, 4096): {"bf16-sdpa": 128.0, "int4-kernel": 64.0},
+    }
+    for (batch, context), caches in steps.items():
+        for cache, ms in caches.items():
+            per_token = 114688 if cache.startswith("bf16") else (65408 if "int8" in cache else 33152)
+            row = {"model": "Qwen/Qwen3-0.6B", "cache": cache, "batch": batch, "context": context}
+            row.update(step_ms=ms, tokens_per_s=batch / (ms / 1e3), kv_bytes_per_token=per_token)
+            row["kv_bytes"] = per_token * batch * context
+            if cache != "bf16-sdpa":
+                row.update(top1_agreement=1.0, max_logit_diff=0.5, kl_first_step=0.01)
+            add("m7_nanoserve", row, "nanoserve")
+    for cache, busy in (("bf16-sdpa", 40), ("int4-kernel", 5)):
+        events = [[0, 0, 10], [1, 20, busy], [0, 20 + busy + 10, 10]]
+        names = ["gemv", "decode_attention_kernel" if cache == "int4-kernel" else "sdpa_kernel"]
+        timeline = {"cache": cache, "batch": 1, "context": 16384, "names": names, "events": events}
+        add("m7_timeline", timeline, "nanoserve")
+    norm = {"batch": 1, "context": 128, "reference_step_ms": 60.0, "fused_step_ms": 50.0}
+    add("m7_norm_in_model", {**norm, "max_logit_diff": 0.01, "top1_agreement": 1.0}, "nanoserve")
+
+    for cache, kl in (("bf16-kernel", 1e-5), ("int8-kernel", 0.001), ("int4-kernel", 0.02)):
+        row = {"model": "Qwen/Qwen3-0.6B", "cache": cache, "window": 512, "positions": 2044, "mean_kl": kl}
+        row.update(top1_agreement=1 - kl, perplexity_ref=20.0, perplexity_cand=20.0 + kl)
+        add("m7_kl", row, "quality")
+    cells = [{"length": 1024, "depth": 0.5, "secret": "1", "passed": True, "answer": "1"}] * 4
+    needle = {"model": "Qwen/Qwen3-0.6B", "cache": "int4-kernel", "cells": cells, "pass_rate": 1.0}
+    add("m7_needle", needle, "quality")
+    return records
