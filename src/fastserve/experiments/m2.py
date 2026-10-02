@@ -11,7 +11,8 @@ import json
 import re
 from typing import Any
 
-from fastserve.engine.loader import model_dir
+from fastserve.engine.loader import checkpoint_dir, model_dir
+from fastserve.hw.telemetry import PowerSampler
 from fastserve.results import environment_info, make_record, new_run_id
 from fastserve.serving.client import run_load
 from fastserve.serving.metrics import RequestResult, request_rows, summarize
@@ -55,9 +56,11 @@ async def _monitored(
     async with aiohttp.ClientSession() as session:
         before = await accepted_per_position(session, url)
         sampler = asyncio.create_task(sample_server(session, url, stop))
-        results = await run_load(url, model, specs, load, seed)
+        with PowerSampler() as power:  # the GPU's draw during this load: tokens per joule (M8)
+            results = await run_load(url, model, specs, load, seed)
         stop.set()
         timeline = await sampler
+        timeline["power"] = power.summary()
         after = await accepted_per_position(session, url)
         if after:  # speculative decoding: draft tokens accepted at each position during this load
             before = before or [0.0] * len(after)
@@ -126,8 +129,7 @@ def run_serving(
         if only is not None and server_cfg.get("name", server_cfg["label"]) not in only:
             continue
         model, label, args = server_cfg["model"], server_cfg["label"], server_cfg.get("args", [])
-        path = server_cfg.get("path") or model
-        path = path if path.startswith("/") else model_dir(path, download=path != model)
+        path = checkpoint_dir(server_cfg["path"]) if server_cfg.get("path") else model_dir(model)
         env = server_cfg.get("env")
         args = [*args, *_speculative_args(server_cfg.get("speculative"))]
         with VLLMServer(path, served_name=model, extra_args=args, env=env) as server:

@@ -24,6 +24,20 @@ def model_dir(repo_id: str, *, download: bool = False) -> str:
     return snapshot_download(repo_id, allow_patterns=MODEL_FILES, local_files_only=not download)
 
 
+def checkpoint_dir(source: str) -> str:
+    """Local directory of a checkpoint to *serve*: a folder as is, or every file of a Hub repo.
+
+    Unlike `model_dir`, nothing is filtered out. A checkpoint saved by a recent transformers keeps its chat
+    template in `chat_template.jinja`, which `MODEL_FILES` does not match: served without it, chat requests
+    fail and real-prompt workloads are rendered with no template.
+    """
+    if source.startswith("/"):
+        return source
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(source)
+
+
 def from_state_dict(
     cfg: ModelConfig, state: dict[str, torch.Tensor], *, device: torch.device | str, dtype: torch.dtype
 ) -> CausalLM:

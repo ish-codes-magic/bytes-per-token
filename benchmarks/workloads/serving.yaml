@@ -61,3 +61,6 @@ spec_code: {tasks: [code], prompts_per_task: 8, output_len: 192}
 spec_math: {tasks: [math], prompts_per_task: 8, output_len: 192}
 spec_summarize: {tasks: [summarize], prompts_per_task: 8, output_len: 192}
 spec_mixed: {tasks: [chat, code, math, summarize], prompts_per_task: 48, output_len: 192}
+
+# M8: the latency workload. One user, the four tasks interleaved (M6's four one-user workloads in one).
+m8_latency: {tasks: [chat, code, math, summarize], prompts_per_task: 8, output_len: 192}

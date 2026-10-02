@@ -1,0 +1,44 @@
+# M8: the full stack. Run: uv run --only-group local modal run infra/modal_app.py::m8
+# One vLLM server per combination of techniques, the same workloads on every server, one L4.
+# A server's label is the letters that are switched on ("wk" = FP8 weights + FP8 KV); see serving/ablation.py.
+
+workloads_file: benchmarks/workloads/serving.yaml
+dollars_per_hour: 0.80
+slo: {ttft_ms: 500, tpot_ms: 50}
+seed: 0
+
+techniques:                      # in ladder order
+  w: {name: FP8 weights, path: "ishita-codes-ai/{model}-FP8-Dynamic"}
+  a: {name: INT4 weights (AWQ), path: "ishita-codes-ai/{model}-W4A16-AWQ"}      # the low-latency alternative to w
+  f: {name: FlashInfer attention, args: [--attention-backend, FLASHINFER]}       # control: k's kernel, BF16 bytes
+  k: {name: FP8 KV cache, args: [--kv-cache-dtype, fp8]}
+  p: {name: prefix caching, args: [--enable-prefix-caching], off_args: [--no-enable-prefix-caching]}
+  s:
+    name: speculative decoding (EAGLE-3 head, k = 3)
+    speculative:
+      Qwen/Qwen3-1.7B: {method: eagle3, model: AngelSlim/Qwen3-1.7B_eagle3, num_speculative_tokens: 3}
+      Qwen/Qwen3-0.6B: {method: eagle3, model: Nicolassuez/Qwen3-0.6B-eagle3, num_speculative_tokens: 3}
+common_args: [--enable-prompt-tokens-details]      # reports cached prompt tokens per request
+
+plan:
+  Qwen/Qwen3-1.7B:
+    factorial: [w, k, p, s]      # all 16 combinations: the ladder, leave-one-out, and every pair
+    combos: [wf, a, akps]        # the FlashInfer control for the KV step; the INT4 branch, alone and full
+    repeats: [base, wkps]        # run twice: how much two identical servers differ
+    ladder: [base, w, wf, wk, wkp, wkps, akps]
+  Qwen/Qwen3-0.6B:
+    combos: [base, w, wf, wk, wkp, wkps, kps, wps, wks]   # the ladder, and leave-one-out
+    ladder: [base, w, wf, wk, wkp, wkps]
+
+loads:
+  m8_latency:                    # one user, real prompts (chat, code, math, summarization)
+    - {mode: closed, concurrency: 1}
+  spec_mixed:                    # a busy server: 64 users, the same four tasks
+    - {mode: closed, concurrency: 64}
+  capacity:                      # 96 users with 4k-token prompts: more than a BF16 cache holds at once
+    - {mode: closed, concurrency: 96}
+  multi_turn:                    # conversations that extend shared prefixes: where prefix caching applies
+    - {mode: closed, concurrency: 8}
+  long_32k:                      # one user, 32k tokens: the KV read dominates each step
+    - {mode: closed, concurrency: 1}
+only_for: {long_32k: ladder}     # workloads that only the servers in this plan list run
