@@ -7,6 +7,7 @@ import pytest
 from fastserve.report.m7 import (
     attention_error_table,
     attention_table,
+    flush_table,
     m4_gap,
     m4_gap_table,
     m7_observables,
@@ -104,6 +105,8 @@ def test_kernel_2_tables(m7_records):
     views = timing_views_table(m7_records)  # cold · eager (+200 µs of Python) · graph (half: warm cache)
     assert "| 1 × 32,768 | 37.0 | 3,500 · 3,700 · 1,750 | 700 · 900 · 350 | 1,000 · 1,200 · 500 |" in views
     assert "16 ×" not in views
+    flush = flush_table(m7_records)  # writing the scratch buffer costs every contender the same 130 µs
+    assert "| 1 × 32,768 | 3,500 · 3,630 (+130) | 700 · 830 (+130) | 1,000 · 1,130 (+130) |" in flush
     tune = tune_table(m7_records)
     assert "| 1 × 32,768 | INT4 | 512 | 4 | 512 | 350 | 10.0× | 2.0× | 11.4× |" in tune
 

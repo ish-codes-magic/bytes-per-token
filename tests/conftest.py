@@ -938,6 +938,7 @@ def m7_records() -> list[dict[str, Any]]:
             ms, nbytes = ms * unit, tokens * per_token
             contenders[name] = {**timed(ms), "cache_bytes": nbytes, "gbps": nbytes / (ms / 1e3) / 1e9}
             contenders[name].update(eager_ms=ms + 0.2, graph_ms=ms / 2)  # Python adds 200 µs; L2 halves it
+            contenders[name]["write_flush_ms"] = ms + 0.13  # evicting modified lines: a constant
             if name.startswith("triton"):
                 contenders[name].update(error_vs_reference=2e-5, error_vs_bf16=0.01, split=512)
         if context == 512:  # launch-bound: the kernel loses

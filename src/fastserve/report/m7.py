@@ -393,6 +393,26 @@ def timing_views_table(m7: Records, batch: int = 1) -> str:
     return markdown_table(headers, rows)
 
 
+def flush_table(m7: Records, batch: int = 1) -> str:
+    """The same cold call after evicting L2 by reading a scratch buffer, and by writing it (M0–M6's way)."""
+    names = ["sdpa-bf16", "flashinfer-fp16", "triton-bf16", "triton-int4"]
+    rows = []
+    for m in attention_cases(m7):
+        if m["batch"] != batch or "write_flush_ms" not in (m["contenders"].get("triton-int4") or {}):
+            continue
+        cells = [_shape(m["batch"], m["context"])]
+        for name in names:
+            c = m["contenders"].get(name) or {}
+            read, write = c.get("ms"), c.get("write_flush_ms")
+            if read is None or write is None:
+                cells.append(DASH)
+            else:
+                cells.append(f"{read * 1e3:,.0f} · {write * 1e3:,.0f} ({(write - read) * 1e3:+,.0f})")
+        rows.append(cells)
+    headers = ["Batch × context"] + [ATT_LABELS[n] + ": read · write flush (µs)" for n in names]
+    return markdown_table(headers, rows)
+
+
 def _e(x: float | None) -> str:
     return DASH if x is None else f"{x:.1e}"
 
