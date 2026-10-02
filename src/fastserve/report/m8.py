@@ -839,9 +839,8 @@ def repeat_table(m8: Records, model: str) -> str:
 
 def kept_table(m8: Records, model: str) -> str:
     """Tokens per target pass with the EAGLE head, per workload and stack: what speculation worked with."""
-    labels = [
-        label for label in ("s", "ws", "ks", "ps", "wkps", "akps") if serving(m8, model, label, "m8_latency")
-    ]
+    wanted = ("s", "ws", "ks", "ps", "wkps", "akps") if model == LARGE else ("wps", "wks", "kps", "wkps")
+    labels = [label for label in wanted if serving(m8, model, label, "m8_latency")]
     rows = []
     for workload in WORKLOADS:
         cells = [WORKLOAD_LABELS[workload]]
@@ -1420,6 +1419,41 @@ def host_chain_table(m8: Records) -> str:
     return markdown_table(headers, rows)
 
 
+def busy_step_table(m8: Records) -> str:
+    """FP8 weights at 64 users, on each attention backend and graph mode: time between a user's tokens."""
+    names = {
+        "w": "FlashAttention, BF16 cache",
+        "wg": "FlashAttention, BF16 cache, piecewise graphs only (control)",
+        "wf": "FlashInfer, BF16 cache (control)",
+        "wk": "FlashInfer, FP8 cache",
+    }
+    rows = []
+    for model in (SMALL, LARGE):
+        for label, name in names.items():
+            if serving(m8, model, label, "spec_mixed"):
+                rows.append(
+                    [
+                        model.split("/")[-1],
+                        f"`{label}`",
+                        name,
+                        _f(stat(m8, model, label, "m8_latency", "tpot_ms"), 1),
+                        _f(stat(m8, model, label, "spec_mixed", "tpot_ms"), 1),
+                        _f(tok_s(m8, model, label, "spec_mixed"), 0),
+                        _f(power(m8, model, label, "spec_mixed"), 0),
+                    ]
+                )
+    headers = [
+        "Model",
+        "Server",
+        "Attention",
+        "TPOT, 1 user (ms)",
+        "TPOT, 64 users (ms)",
+        "Tokens/s, 64 users",
+        "GPU power, 64 users (W)",
+    ]
+    return markdown_table(headers, rows)
+
+
 def plan_cost(
     m8: Records, kind: str, batch: int = 1, context: int = 600, what: str = "host_ms"
 ) -> float | None:
@@ -1536,6 +1570,97 @@ def control_observables(m8: Records) -> dict[str, float | None]:
         "control_small_g_step_ms": step_ms(m8, SMALL, "g"),
         "control_large_wg_step_ms": step_ms(m8, LARGE, "wg"),
     }
+
+
+def _best_list(m8: Records, model: str, allow_int4: bool = False) -> str:
+    """ "latency `wps` 2.25×, busy ..." for the best measured stack on each workload."""
+    parts = []
+    for workload in WORKLOADS:
+        top, base = best(m8, model, workload, allow_int4), tok_s(m8, model, BASE, workload)
+        if top and base and (not allow_int4 or "a" in letters(top[0])):
+            name = WORKLOAD_LABELS[workload].split(" (")[0].lower()
+            parts.append(f"{name} `{top[0]}` {top[1] / base:.2f}×")
+    return ", ".join(parts)
+
+
+def full_stack_wins(m8: Records, model: str) -> tuple[int, int]:
+    """(workloads where the full stack is the best FP8-class stack, workloads measured)."""
+    tops = [best(m8, model, workload, allow_int4=False) for workload in WORKLOADS]
+    tops = [top for top in tops if top]
+    return sum(top[0] == FULL for top in tops), len(tops)
+
+
+def findings(
+    m8: Records,
+    frozen_file: dict[str, Any],
+    m4: Records,
+    m2_quality: Records,
+    informed: tuple[float, float] | None = None,
+) -> str:
+    """M8 in a few bullets, every number computed here. `informed` is (median error, share within 15%) of
+    the model with the host term, on M8's measured inputs."""
+    observed = m8_observables(m8, frozen_file, m4, m2_quality)
+    wins, measured = full_stack_wins(m8, LARGE)
+    small_wins, small_measured = full_stack_wins(m8, SMALL)
+    top = best(m8, LARGE, "m8_latency", allow_int4=False)
+    cells = [interaction(m8, LARGE, a, b, w) for a, b in pairs() for w in WORKLOADS[:4]]
+    cells = [c for c in cells if c is not None]
+    near = sum(abs(c - 1) <= 0.05 for c in cells)
+    errors = prediction_errors(m8, frozen_file)
+    within = sum(abs(r["error"]) <= 0.15 for r in errors) / len(errors)
+
+    def percent(value: float | None, digits: int = 1) -> str:
+        return _f(100 * value if value is not None else None, digits, "%")
+
+    from fastserve.report import m4 as m4_report
+
+    scores = next((m["scores"] for m in reversed(_sorted(m8, "m8_tasks")) if m["model"] == LARGE), {})
+    baseline = m4_report.tasks(m4, m2_quality, LARGE, "bf16")
+
+    def change(task: str) -> str:
+        """Task score of FP8 weights + FP8 KV minus BF16's, in points."""
+        score = (scores.get(task) or {}).get("score")
+        if score is None or baseline.get(task) is None:
+            return DASH
+        return f"{100 * score - baseline[task]:+.1f}"
+
+    best_fp8 = _best_list(m8, LARGE)
+    best_int4 = _best_list(m8, LARGE, allow_int4=True)
+    full_one_user = _f(observed["full_latency"], 2, "×")
+    top_one_user = _f(speedup(m8, LARGE, top[0], "m8_latency"), 2, "×")
+    small_one_user = _f(observed["small_full_latency"], 2, "×")
+    piecewise, graph = _f(step_ms(m8, SMALL, "wg"), 1), _f(step_ms(m8, SMALL, "w"), 1)
+    collision = _f(interaction(m8, LARGE, "k", "s", "m8_latency"), 2)
+    lines = [
+        "- **The best measured stack, Qwen3-1.7B on one L4, against stock BF16 vLLM:** "
+        f"{best_fp8}. With INT4 weights allowed (lower quality, M4): {best_int4}.",
+        f"- **The full stack (`{FULL}`: FP8 weights, FP8 KV, prefix caching, speculation) is the best stack "
+        f"on {wins} of {measured} workloads on Qwen3-1.7B and {small_wins} of {small_measured} on "
+        f"Qwen3-0.6B.** At one user it gives {full_one_user} where `{top[0]}` gives {top_one_user}; on "
+        f"Qwen3-0.6B it is slower than stock ({small_one_user}).",
+        "- **Why: one pair collides.** With an FP8 KV cache and speculation together, vLLM 0.30 gives up "
+        "its full CUDA graph on this GPU, and a step then waits for the host instead of the GPU: "
+        f"{piecewise} ms per step against {graph} with the graph, for the same GPU work (Qwen3-0.6B, FP8 "
+        "weights, piecewise graphs forced on a control server).",
+        f"- **Everything else nearly multiplies:** {near} of {len(cells)} pair × workload interactions "
+        f"are within 5% of 1. FP8 KV × speculation is {collision} at one user.",
+        "- **Quality of the lossy part of the stack** (FP8 weights + FP8 KV, Qwen3-1.7B, in vLLM): "
+        f"perplexity ×{_f(observed['quality_perplexity'], 3)}, needle recall "
+        f"{percent(observed['quality_needle'], 0)}, GSM8K {change('gsm8k')}, MMLU {change('mmlu')} and "
+        f"HumanEval {change('humaneval')} points. Prefix caching does not change outputs; speculation is "
+        "lossless in distribution (M6).",
+        "- **The serving model, frozen before any M8 server ran:** median error "
+        f"{percent(observed['model_median_error'])} over {len(errors)} predictions ({100 * within:.0f}% "
+        f"within 15%), {percent(observed['model_median_error_plain'])} on servers without speculation. "
+        "Its large misses are the colliding servers: it had no term for the host."
+        + (
+            f" With that one constant fitted on M8, the same points come to {100 * informed[0]:.1f}% "
+            f"({100 * informed[1]:.0f}% within 15%)."
+            if informed
+            else ""
+        ),
+    ]
+    return "\n".join(lines)
 
 
 # ---- predictions -------------------------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from fastserve.hw.analysis import (  # noqa: E402
     measured_peak_flops,
     metrics_of,
 )
+from fastserve.perfmodel import fit  # noqa: E402
 from fastserve.report import m4 as m4_report  # noqa: E402
 from fastserve.report import m5 as m5_report  # noqa: E402
 from fastserve.report import m6 as m6_report  # noqa: E402
@@ -213,12 +214,18 @@ def m8_blocks(
             "m8_collision": m8_report.collision_table(m8, LARGE),
             "m8_host_chain": m8_report.host_chain_table(m8),
             "m8_plan_cost": m8_report.plan_cost_table(m8),
+            "m8_busy_steps": m8_report.busy_step_table(m8),
             "m8_profiles_large": m8_report.profile_table(m8, ["1.7b-s", "1.7b-sg", "1.7b-fs"]),
             "m8_profiles_small": m8_report.profile_table(m8, ["0.6b-w", "0.6b-g", "0.6b-wg"]),
             "m8_fallback_message": f"> {m8_report.fallback_message(m8, LARGE, 'ks')}",
             "m8_host_step_ms": f"{m8_report.host_step_ms(m8):.0f}",
         }
     )
+    informed_cal = m8_report.informed_calibration(cal, m8)
+    kept = [point for point in measured_points if not point.label.endswith("-r2")]
+    errors = fit.errors(kept, configs, hw, informed_cal)
+    informed = (fit.median_abs(errors), sum(abs(e) <= 0.15 for e in errors) / len(errors)) if errors else None
+    blocks["m8_findings"] = m8_report.findings(m8, frozen, earlier["m4"], m2_quality, informed)
     for model, size in ((LARGE, "large"), (SMALL, "small")):
         perplexity = m8_report.perplexities(m8, earlier["m5"], earlier["m4"], model)
         blocks[f"m8_best_{size}"] = m8_report.best_table(m8, model, perplexity)
