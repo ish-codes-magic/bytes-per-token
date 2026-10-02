@@ -24,3 +24,19 @@ jobs:
           python-version: "3.11"
       - run: uv sync --frozen --group dev
       - run: uv run --frozen pytest -q
+
+  reproduce-quick:
+    # Redraw every figure from the committed raw records, without a GPU. A figure's caption is computed from
+    # the data, so each redrawn caption must equal the committed one.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv run --frozen --only-group quick python scripts/make_figures.py --out redrawn --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: figures-redrawn
+          path: redrawn/*.png
