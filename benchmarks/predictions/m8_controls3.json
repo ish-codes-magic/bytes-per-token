@@ -1,6 +1,6 @@
 {
   "milestone": "M8",
-  "written_in_commit": null,
+  "written_in_commit": "cb5eb27",
   "note": "Third round, written after the profiles of `s` and `fs` and before these servers were timed. The profiles show the two servers doing the same GPU work (about 430 ms of kernels in 24 steps) in 446 ms and 990 ms: with FlashInfer and speculation the GPU is idle more than half the time while vLLM's Python runs between the layers (piecewise graphs: 31 graph launches, 31 attention calls and 31 cache updates per step, from Python). That reopens the first round. `g` and `sg` showed no loss on Qwen3-1.7B, but there the GPU needs 15-18 ms per pass, long enough to hide a host chain shorter than that. Qwen3-0.6B with FP8 weights needs 4.3 ms per step and 5.7 ms per speculative pass, so it can show the host chain of piecewise graphs on FlashAttention. Letters as before; output tokens/s ratios at one user, Qwen3-0.6B.",
   "predictions": [
     {"id": "control_wsg_latency", "label": "Qwen3-0.6B, speculation with piecewise graphs only, on FlashAttention ÷ with full graphs (wsg ÷ wps): 1.0 means the graph mode is innocent; 0.22 is what FlashInfer gives (wks)", "low": 0.25, "high": 0.45},
