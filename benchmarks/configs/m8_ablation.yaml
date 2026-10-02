@@ -35,6 +35,7 @@ plan:
     ladder: [base, w, wf, wk, wkp, wkps, akps]
   Qwen/Qwen3-0.6B:
     combos: [base, w, wf, wk, wkp, wkps, kps, wps, wks]   # the ladder, and leave-one-out
+    controls: [wg, wsg]         # third round: piecewise graphs on FlashAttention, where the GPU's pass is short
     ladder: [base, w, wf, wk, wkp, wkps]
 
 loads:
