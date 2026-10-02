@@ -272,7 +272,7 @@ glossary and interview prep.
 1. **Budget.** What Modal has billed so far:
 
 <!-- BEGIN GENERATED: compute_spend_month -->
-   **$22.04** in 2026-10, billed through 2026-10-02 08:00 UTC.
+   **$22.97** in 2026-10, billed through 2026-10-02 09:00 UTC.
 <!-- END GENERATED: compute_spend_month -->
 
    Modal's billing lags by hours, and most of M8's controls and profiles ran after the hour shown. I expect
