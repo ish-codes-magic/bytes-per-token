@@ -1,6 +1,6 @@
 {
   "milestone": "M8",
-  "written_in_commit": "pending",
+  "written_in_commit": "d4b75a2",
   "note": "Written before any M8 server ran (only a startup check of three combinations, which timed nothing). The point value behind each range is the serving model's prediction, frozen in benchmarks/predictions/m8_model.json; the range is my judgment of how far it can be off. Letters: w = FP8 weights, a = INT4 (AWQ) weights, k = FP8 KV cache, p = prefix caching, s = speculative decoding (EAGLE-3, k = 3). 'x' is output tokens/s ÷ the base server's on the same workload, vLLM 0.30 on one L4. Qwen3-1.7B unless stated. Workloads: latency = one user, real prompts; busy = 64 users, real prompts; capacity = 96 users with 4k-token prompts; multi-turn = 8 users on shared prefixes; long = one user, 32k tokens.",
   "predictions": [
     {"id": "full_latency", "label": "Full stack (wkps) on latency (x)", "low": 1.8, "high": 2.5},
