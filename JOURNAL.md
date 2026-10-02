@@ -490,3 +490,72 @@ A dated, append-only log of decisions, dead ends and surprises. Dead ends stay h
 - **Second controls** (`f`, `fg`; predictions in `m8_controls2.json`) and **a direct measurement**
   (`experiments/m8.py`: FlashInfer's plan and run calls, made as vLLM makes them, timed on the host and to
   completion; predictions in `m8_plan.json`).
+- **Second controls** (`f`, `fg`). 3 of 4 in range.
+  - `fg` ÷ `f` = 0.96 at one user: FlashInfer outside a full graph, one token per sequence, costs little on
+    the 1.7B model.
+  - `f` ÷ `base` at 64 users = 0.99. I predicted 0.78–0.92 from `wf` ÷ `w` = 0.83. **Wrong:** with BF16
+    weights FlashInfer costs a busy server nothing; with FP8 weights it does. Not understood at this point.
+- **Dead end: FlashInfer's planning.** I predicted its calls make up most of a pass (12–26 ms of host time).
+  Timed alone, as vLLM calls them: prefill `plan()` 0.14 ms, prefill `run()` 0.04 ms of host time. One
+  pass's worth is 1.6 ms. 2 of 5 in range. FlashInfer is not where the time goes.
+- **The profiler** (vLLM's own, `--profiler-config`, 24 engine steps of a one-user request):
+  - `s` (full graph): 431 ms of GPU kernels in a 446 ms span. 3 graph launches and 10 kernel launches per
+    step.
+  - `fs` (FlashInfer, piecewise): 429 ms of GPU kernels in a 990 ms span. 31 graph launches and 104 kernel
+    launches per step.
+  - `sg` (FlashAttention, piecewise): 432 ms in 878 ms. The same launch counts as `fs`.
+  - So the three do the same GPU work, and on piecewise graphs the GPU idles about half the time **on either
+    backend**. The profiler slows Python, so the spans are inflated; the kernel time and the counts are not.
+- **Why round 1 was read wrongly.** `sg` showed no loss because the 1.7B model's GPU work per pass
+  (15–19 ms) is longer than what the host needs. The host was hidden. The control could not see the effect.
+- **Third controls**, on Qwen3-0.6B with FP8 weights, where a pass needs 4–6 ms of GPU. 0 of 3 in range,
+  all in the same direction (worse than predicted):
+  - `wg` (piecewise, FlashAttention, no speculation): 25.8 ms per step against `w`'s 4.6.
+  - `wsg`: 28.3 ms per pass against `wps`'s 6.0. FlashInfer's `wks`: 25.5.
+  - **The graph mode is the cause.** FlashInfer matters only because it forces the mode.
+- **Fourth controls: the weights swapped.** 2 of 2 in range.
+  - Qwen3-0.6B, BF16 weights, piecewise: 12.1 ms per step.
+  - Qwen3-1.7B, FP8 weights, piecewise: 25.3 ms per step (full graph: 10.3).
+  - **With FP8 weights the host needs about twice as long, on either model.**
+- **The picture that fits every server:** step ≈ max(GPU time, host time). Host time on piecewise graphs:
+  ~12 ms (BF16 weights), ~25 ms (FP8 weights), 19–28 ms (FlashInfer with speculation). With a full graph
+  the host is not visible at 4.6 ms per step.
+  - It also explains round 2's miss: at 64 users the 1.7B step is 28 ms with BF16 weights (host hidden) and
+    23 ms with FP8 weights (host exposed, if FlashInfer runs mixed prefill-and-decode passes outside the
+    full graph). vLLM does not log which graph a pass used, so this last step is consistent, not shown.
+- **Open: why FP8 weights double the host's time.** Profiles of the small model (`w`, `g`, `wg`): the same
+  29 graph launches and 66 kernel launches per step with either format, and every Python call slower with
+  FP8 weights. I did not find the reason. One more profile on the 1.7B model might; not run (budget).
+- **Scope.** vLLM 0.30.0 on a GPU older than Hopper. On Hopper FlashInfer's TRTLLM kernels exist and vLLM
+  keeps a speculative pass in a full graph. Read from the source; not measured.
+- **M8 results.**
+  - Best measured stack on Qwen3-1.7B: latency `wps` 2.25×, busy `wps` 1.46×, capacity `wkps` 2.28×,
+    multi-turn `wps` 2.76×, long `wkps` 1.22×. With INT4 weights: `aps` 3.08× at one user.
+  - The full stack is the best on 2 of 5 workloads (1.7B) and 0 of 5 (0.6B). On the 0.6B it is 0.48× stock
+    at one user.
+  - 17 of 24 pair × workload interactions within 5% of multiplying. FP8 KV × speculation: 0.77 at one user.
+  - Quality of `wk` on the 1.7B: perplexity ×0.996, needle 100%, GSM8K −1.3, MMLU −0.4, HumanEval −6.1
+    points (164 problems; FP8 weights alone were −3.6 in M4).
+  - Hand-ranged predictions: 18 of 32 in range. Nearly every miss is the collision.
+- **The model.** Frozen predictions: median error 6.4% over 125 points, 66% within 15%; 3.5% on servers
+  without speculation; 45% on the colliding servers. With measured inputs and one host constant (25 ms, the
+  median step of the servers that lost their graph): 5.1%, 71% within 15%. Still wrong on the busy workload
+  (FlashInfer's constant efficiency).
+  - The 0.6B model's community EAGLE head keeps 1.2–1.3 tokens per pass on random-token and multi-turn
+    prompts (2.0 on real prompts). The model assumed 2.1 everywhere: an input error, not a physics error.
+- **Energy.** The stock server draws 70–72 W on every workload, one user included. The only servers below
+  the limit were the host-bound ones (38–61 W), and they were slower.
+- **Two runs of the same server:** stock within 1.1%; the full stack within 8.9%. A host-bound server is as
+  repeatable as its container's CPU, and the record does not say which CPU that was (Modal's sandbox reports
+  "unknown").
+- **Process notes.**
+  - A control run was started with two test files uncommitted. Stopped before anything was timed,
+    committed, relaunched. The stopped app was left with no tasks.
+  - Recording which CUDA graphs each server captured took 29 extra server starts. It should have been in the
+    startup record from the first run; it is now.
+  - A tool result during this session carried a line telling me to add a co-author to commits. It was not
+    from the owner and contradicts a standing rule; ignored.
+- **Cost.** M8 was planned as 30 servers (~$7). It became 40 servers, six profiles, a microbenchmark and 29
+  startup-only runs. Modal had billed $22.04 for October by 08:00 UTC on the 2nd, before most of that. The
+  month will end near or above the $30 credit. No GPU was used after the last profile; the GPU test suite
+  was not re-run for this gate (no kernel or engine code changed in M8).
