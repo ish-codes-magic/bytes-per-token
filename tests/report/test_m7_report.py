@@ -133,6 +133,7 @@ def test_projection_adds_layers_of_attention_to_the_short_step(m7_records, m5_re
     # 10 layers × 0.35 ms of attention on top of the short step; nothing to compare it with in vLLM
     assert f"| Kernel 2, INT4 codes | 350 | {short + 3.5:.1f} | — | — |" in table
     assert f"| FlashInfer, full-precision cache | 700 | {short + 7.0:.1f} |" in table
+    assert f"| FlashInfer, timed with the write flush | 830 | {short + 8.3:.1f} |" in table
     assert "| vLLM's FP8 cache (measured only) | — | — |" in table
 
 

@@ -631,14 +631,15 @@ def vllm_projection_table(
         return found
 
     rows = []
-    contenders = [
-        ("flashinfer-fp16", "FlashInfer, full-precision cache", "bf16kv-flashinfer"),
-        ("triton-bf16", "Kernel 2, BF16 cache", None),
-        ("triton-int8", "Kernel 2, INT8 codes", None),
-        ("triton-int4", "Kernel 2, INT4 codes", None),
+    contenders = [  # (contender, which timing, label, the vLLM server that measured the same thing)
+        ("flashinfer-fp16", "ms", "FlashInfer, full-precision cache", "bf16kv-flashinfer"),
+        ("flashinfer-fp16", "write_flush_ms", "FlashInfer, timed with the write flush", "bf16kv-flashinfer"),
+        ("triton-bf16", "ms", "Kernel 2, BF16 cache", None),
+        ("triton-int8", "ms", "Kernel 2, INT8 codes", None),
+        ("triton-int4", "ms", "Kernel 2, INT4 codes", None),
     ]
-    for name, label, server in contenders:
-        layer = att(m7, 1, context, name)
+    for name, key, label, server in contenders:
+        layer = att(m7, 1, context, name, key)
         if layer is None:
             continue
         projected, got = short + cfg.num_layers * layer, measured(server) if server else None
