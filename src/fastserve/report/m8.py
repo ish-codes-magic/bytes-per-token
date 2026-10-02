@@ -1665,6 +1665,8 @@ def findings(
     return "\n".join(lines)
 
 
+MAP_USERS = [1, 2, 4, 8, 16, 32, 64, 128, 256]  # the recommendation map's axes
+MAP_CONTEXTS = [512, 1024, 2048, 4096, 8192, 16384, 32768]
 CANDIDATE_STACKS = {  # label → (weights, FP8 KV, speculation): what the model is asked to choose from
     "base": ("bf16", False, False),
     "w": ("fp8", False, False),

@@ -319,8 +319,7 @@ def recommendation_map(
     `cal` is the M8-informed calibration: it knows that FP8 KV with speculation waits for the host. A ★ marks
     the cells next to a measured workload where the model's pick is also the fastest measured stack.
     """
-    users = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-    contexts = [512, 1024, 2048, 4096, 8192, 16384, 32768]
+    users, contexts = report.MAP_USERS, report.MAP_CONTEXTS
     panels = [
         ("FP8-class quality only", [c for c in CANDIDATES if not c.startswith("a")]),
         ("INT4 weights allowed (lower quality: M4)", list(CANDIDATES)),
