@@ -90,3 +90,53 @@ def sample_during(
         "min_sm_clock_mhz": min(sm_clock_mhz),
         "n_samples": len(power_w),
     }
+
+
+class PowerSampler:
+    """Sample GPU power in a background thread while something else runs: the denominator of tokens per joule.
+
+        with PowerSampler() as power:
+            run_the_load()
+        power.summary()   # {"mean_w": ..., "max_w": ..., "n_samples": ..., "seconds": ...}; None without NVML
+
+    Unlike `sample_during`, it does not drive the work itself, so it fits around a serving load.
+    """
+
+    def __init__(self, interval_s: float = 0.1):
+        self.interval_s = interval_s
+        self._watts: list[float] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started = self._seconds = 0.0
+
+    def __enter__(self) -> PowerSampler:
+        nvml = _nvml()
+        if nvml is None or _read(lambda: nvml[0].nvmlDeviceGetPowerUsage(nvml[1])) is None:
+            return self  # no NVML here: summary() will say so with None
+        m, h = nvml
+
+        def sample() -> None:
+            while not self._stop.is_set():
+                self._watts.append(m.nvmlDeviceGetPowerUsage(h) / 1e3)
+                self._stop.wait(self.interval_s)
+
+        self._started = time.perf_counter()
+        self._thread = threading.Thread(target=sample, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._seconds = time.perf_counter() - self._started
+
+    def summary(self) -> dict[str, Any] | None:
+        if not self._watts:
+            return None
+        return {
+            "mean_w": statistics.fmean(self._watts),
+            "max_w": max(self._watts),
+            "n_samples": len(self._watts),
+            "seconds": self._seconds,
+        }
