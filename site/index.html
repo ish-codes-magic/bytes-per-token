@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bytes-per-token: results</title>
+  <meta name="description" content="Making small LLMs serve faster and cheaper on one L4, with every gain attributed. Interactive results and a performance-model calculator.">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+<header>
+  <h1>bytes-per-token</h1>
+  <p class="claim">Small open-weight LLMs served faster and cheaper on one low-cost GPU, with every gain measured,
+    attributed and checked against a model built from bytes and FLOPs.</p>
+  <p class="meta" id="environment"></p>
+  <nav>
+    <a href="#headline">Headline</a>
+    <a href="#servers">Every server</a>
+    <a href="#interactions">Interactions</a>
+    <a href="#host">The collision</a>
+    <a href="#model">The model</a>
+    <a href="#calculator">Calculator</a>
+    <a href="#needle">Long context</a>
+    <a href="#drafting">Drafting</a>
+    <a href="#tables">Tables</a>
+  </nav>
+</header>
+
+<main>
+  <section id="headline">
+    <h2>What each technique did to the cost of a token</h2>
+    <p>Stock vLLM in BF16, then one technique per bar. A hatched bar is a step that made serving dearer. The
+      last bar is the best stack that was measured, when it is not the full one.</p>
+    <div class="controls">
+      <label>Model <select id="waterfall-model"></select></label>
+      <label>Workload <select id="waterfall-workload"></select></label>
+      <label>Show <select id="waterfall-unit">
+        <option value="dollars">$ per 1M output tokens</option>
+        <option value="tok_s">output tokens per second</option>
+      </select></label>
+    </div>
+    <div id="waterfall" class="chart"></div>
+    <p class="takeaway" id="waterfall-takeaway"></p>
+    <h3>Findings</h3>
+    <ul id="findings" class="findings"></ul>
+    <p class="note">"×" is output tokens per second over stock vLLM in BF16 on the same GPU and workload. These
+      are better configurations of vLLM for a workload, not a faster engine than vLLM.</p>
+  </section>
+
+  <section id="servers">
+    <h2>Every server on one workload</h2>
+    <p>All measured configurations, as a multiple of the stock server. A label is the letters that are on:
+      <code>w</code> FP8 weights, <code>a</code> INT4 weights, <code>k</code> FP8 KV cache, <code>p</code> prefix
+      caching, <code>s</code> speculative decoding. <code>f</code> (FlashInfer on a BF16 cache) and
+      <code>g</code> (piecewise CUDA graphs only) exist only on control servers.</p>
+    <div class="controls">
+      <label>Model <select id="servers-model"></select></label>
+      <label>Workload <select id="servers-workload"></select></label>
+      <label><input type="checkbox" id="servers-controls"> show control servers</label>
+    </div>
+    <div id="servers-chart" class="chart"></div>
+    <p class="takeaway" id="servers-takeaway"></p>
+  </section>
+
+  <section id="interactions">
+    <h2>Do two techniques' gains multiply?</h2>
+    <p>Combined gain ÷ the product of the two gains alone. 1 means they multiply, below 1 they compete for the
+      same slack, above 1 each makes the other more useful. Qwen3-1.7B.</p>
+    <div id="interaction-chart" class="chart"></div>
+    <p class="takeaway" id="interaction-takeaway"></p>
+  </section>
+
+  <section id="host">
+    <h2>The pair that collides: a step that waits for its host</h2>
+    <p>With an FP8 KV cache and speculation together, vLLM 0.30 on this GPU cannot replay a decode pass as one
+      CUDA graph. It falls back to piecewise graphs, Python runs between every layer, and the GPU waits. Each
+      pair of bars is a server on piecewise graphs next to the closest server that kept its full graph.</p>
+    <div id="host-chart" class="chart"></div>
+    <p class="takeaway" id="host-takeaway"></p>
+    <p class="note">A step takes about max(what the GPU needs, what the host needs). Where the GPU already needs
+      longer, nothing changes, which is why the first control server showed no loss.</p>
+  </section>
+
+  <section id="model">
+    <h2>A model that had to predict it</h2>
+    <p>The serving model is built from the model's sizes, the GPU's measured ceilings and a few constants fitted
+      on earlier milestones. Its predictions for every planned server were committed before any ran.</p>
+    <div id="predicted-chart" class="chart tall"></div>
+    <p class="takeaway" id="predicted-takeaway"></p>
+  </section>
+
+  <section id="calculator">
+    <h2>Calculator: what would this stack do for my traffic?</h2>
+    <p>The same model, running in your browser. It is calibrated on one L4 and two models of one family: read
+      it as a prediction with the errors shown above, not as a measurement.</p>
+    <div class="calculator">
+      <form id="calc-form" class="calc-inputs">
+        <label>Model <select id="calc-model"></select></label>
+        <label>Preset <select id="calc-preset"><option value="">custom</option></select></label>
+        <label>Concurrent users <input type="number" id="calc-users" min="1" max="1024" step="1" value="8"></label>
+        <label>Prompt tokens <input type="number" id="calc-prompt" min="16" max="32768" step="16" value="2048"></label>
+        <label>Output tokens <input type="number" id="calc-output" min="8" max="2048" step="8" value="256"></label>
+        <label>Weights <select id="calc-weights">
+          <option value="bf16">BF16 (stock)</option>
+          <option value="fp8" selected>FP8</option>
+          <option value="int4">INT4 (AWQ)</option>
+        </select></label>
+        <label>KV cache <select id="calc-kv">
+          <option value="bf16">BF16</option>
+          <option value="fp8">FP8</option>
+        </select></label>
+        <label><input type="checkbox" id="calc-spec" checked> speculative decoding (EAGLE-3, 3 drafted tokens)</label>
+        <label>Tokens kept per pass <input type="number" id="calc-kept" min="1" max="4" step="0.05" value="2.1"></label>
+        <label><input type="checkbox" id="calc-prefix"> prefix caching</label>
+        <label>Share of the prompt already cached (%) <input type="number" id="calc-cached" min="0" max="100" step="5" value="0"></label>
+        <label>Constants <select id="calc-calibration">
+          <option value="informed">with the host term M8 found</option>
+          <option value="frozen">as frozen before M8</option>
+        </select></label>
+      </form>
+      <div class="calc-outputs">
+        <div class="tiles" id="calc-tiles"></div>
+        <p id="calc-notes" class="note"></p>
+        <h3>This stack, measured</h3>
+        <div id="calc-measured"></div>
+      </div>
+    </div>
+    <h3>Which stack for which traffic?</h3>
+    <p>The model's pick for each number of users and context length, with the model and answer length chosen
+      above. A ★ marks a cell next to a measured workload where the pick is also the fastest measured stack.</p>
+    <div class="controls">
+      <label><input type="checkbox" id="map-int4"> allow INT4 weights (lower quality)</label>
+    </div>
+    <div id="map-chart" class="chart tall"></div>
+    <p class="takeaway" id="map-takeaway"></p>
+  </section>
+
+  <section id="needle">
+    <h2>Long-context correctness</h2>
+    <p>Needle in a haystack: a secret number hidden at a depth in a prompt of a given length. Each cell is the
+      share of three secrets that came back. Lossy KV-cache techniques fail here first.</p>
+    <div class="controls">
+      <label>Configuration <select id="needle-select"></select></label>
+    </div>
+    <div id="needle-chart" class="chart"></div>
+    <p class="takeaway" id="needle-takeaway"></p>
+  </section>
+
+  <section id="drafting">
+    <h2>Where drafting is easy</h2>
+    <p>Generated text with each token colored by who wrote it: drafted and accepted, or written by the target
+      model. Boilerplate and copied text draft well; reasoning steps do not.</p>
+    <iframe src="highlight.html" title="Token acceptance highlighter" loading="lazy"></iframe>
+  </section>
+
+  <section id="tables">
+    <h2>Tables</h2>
+    <div id="table-list"></div>
+  </section>
+</main>
+
+<footer>
+  <p id="parity"></p>
+  <p>Every number on this page is generated from the raw benchmark records in the
+    <a href="https://github.com/ish-codes-magic/bytes-per-token">repository</a>
+    (<code>results/raw/</code>, by <code>scripts/build_site.py</code>). Method and limits:
+    <a href="https://github.com/ish-codes-magic/bytes-per-token/blob/main/docs/06-results-analysis.md">results analysis</a>,
+    <a href="https://github.com/ish-codes-magic/bytes-per-token/blob/main/docs/07-performance-model.md">performance model</a>.</p>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

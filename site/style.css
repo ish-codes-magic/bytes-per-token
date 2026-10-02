@@ -1,0 +1,99 @@
+:root {
+  --text: #1c1c1c;
+  --muted: #5a5a5a;
+  --line: #d9d9d9;
+  --panel: #f6f7f8;
+  --accent: #0072b2;
+  --warn: #d55e00;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header, main, footer {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+header { padding-top: 36px; }
+h1 { margin: 0 0 6px; font-size: 2rem; letter-spacing: -0.01em; }
+h2 { margin: 0 0 8px; font-size: 1.35rem; }
+h3 { margin: 22px 0 8px; font-size: 1.05rem; }
+p { margin: 8px 0; }
+a { color: var(--accent); }
+code { font: 0.92em ui-monospace, Consolas, monospace; background: var(--panel); padding: 1px 4px; border-radius: 3px; }
+
+.claim { font-size: 1.12rem; max-width: 62ch; }
+.meta, .note { color: var(--muted); font-size: 0.92rem; }
+.takeaway { font-style: italic; max-width: 90ch; }
+
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 16px;
+  padding: 10px 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.95rem;
+}
+
+section { padding: 34px 0 8px; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: 0; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0 4px; font-size: 0.95rem; }
+select, input[type="number"] {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #b8b8b8;
+  border-radius: 4px;
+  background: #ffffff;
+}
+input[type="number"] { width: 7.5em; }
+
+.chart { width: 100%; height: 420px; }
+.chart.tall { height: 540px; }
+
+.findings { padding-left: 20px; max-width: 95ch; }
+.findings li { margin: 7px 0; }
+
+.calculator { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 28px; margin-top: 14px; }
+.calc-inputs { display: grid; gap: 9px; align-content: start; padding: 16px; background: var(--panel); border-radius: 8px; }
+.calc-inputs label { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 0.95rem; }
+.calc-inputs label:has(input[type="checkbox"]) { justify-content: flex-start; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
+.tile .value { font-size: 1.5rem; font-weight: 650; line-height: 1.2; }
+.tile .name { color: var(--muted); font-size: 0.85rem; }
+.tile.warn { border-color: var(--warn); }
+.tile.warn .value { color: var(--warn); }
+
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 8px 0 4px; }
+th, td { padding: 5px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { font-weight: 600; border-bottom: 2px solid #b8b8b8; }
+.table-wrap { overflow-x: auto; }
+
+details { margin: 10px 0; }
+summary { cursor: pointer; font-weight: 600; }
+
+iframe { width: 100%; height: 620px; border: 1px solid var(--line); border-radius: 8px; }
+
+footer { padding: 26px 20px 48px; color: var(--muted); font-size: 0.92rem; }
+#parity.ok::before { content: "✓ "; color: #009e73; font-weight: 700; }
+#parity.bad { color: var(--warn); font-weight: 600; }
+
+@media (max-width: 820px) {
+  .calculator { grid-template-columns: 1fr; }
+  .chart { height: 380px; }
+}
