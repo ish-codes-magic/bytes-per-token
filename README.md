@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** Milestones M0–M8 are done. Next: M9 (dashboard, write-up, one-command reproduction).
+> **Status:** Milestones M0–M8 are done. M9 (dashboard, write-up, one-command reproduction) is in progress.
 
 ---
 
@@ -484,7 +484,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | M6 | Speculative decoding, proven lossless | ✅ Done |
 | M7 | Custom Triton kernels: fused norm + INT8, attention over a 4-bit KV cache | ✅ Done |
 | M8 | Full-stack ablation across model sizes, performance model | ✅ Done |
-| M9 | Dashboard, write-up, one-command reproduction | ⏳ |
+| M9 | Dashboard, write-up, one-command reproduction | 🚧 In progress |
 
 ---
 
