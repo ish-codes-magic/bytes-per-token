@@ -36,7 +36,8 @@ def factorial(factors: list[str]) -> list[str]:
 
 def labels(plan: dict[str, Any]) -> list[str]:
     """One model's server labels: its factorial, listed combinations and controls, then the repeats (-r2)."""
-    wanted = [*factorial(plan.get("factorial", [])), *plan.get("combos", []), *plan.get("controls", [])]
+    wanted = [*factorial(plan.get("factorial", [])), *plan.get("combos", [])]
+    wanted += [*plan.get("controls", []), *plan.get("controls2", [])]
     wanted = list(dict.fromkeys(wanted))  # a combination listed twice runs once
     return wanted + [f"{label}-r2" for label in plan.get("repeats", [])]
 

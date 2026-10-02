@@ -1,0 +1,11 @@
+{
+  "milestone": "M8",
+  "written_in_commit": null,
+  "note": "Second round of controls, written after the first round (m8_controls.json) was measured and before these two servers were timed. The first round showed that piecewise CUDA graphs cost nothing on FlashAttention (g = base, sg = s) and that the FP8 bytes are innocent (fs = ks): the 7 ms per pass belong to FlashInfer when speculation is on. What is still open: is FlashInfer slow whenever it runs outside a full CUDA graph (its fast plan for single-token decodes exists only on the graph path), or only when a pass carries several tokens per sequence? f = FlashInfer on a BF16 cache, alone; fg = the same with piecewise graphs only. Qwen3-1.7B, output tokens/s ratios.",
+  "predictions": [
+    {"id": "control_fg_latency", "label": "FlashInfer with piecewise graphs only ÷ FlashInfer, latency (fg ÷ f): 0.70 would mean being outside the full graph is the whole 7 ms", "low": 0.82, "high": 0.97},
+    {"id": "control_f_latency", "label": "FlashInfer on a BF16 cache ÷ base, latency (f ÷ base)", "low": 0.94, "high": 1.0},
+    {"id": "control_f_busy", "label": "FlashInfer on a BF16 cache ÷ base, busy (f ÷ base): with FP8 weights it was 0.83", "low": 0.78, "high": 0.92},
+    {"id": "control_fg_busy", "label": "FlashInfer with piecewise graphs only ÷ FlashInfer, busy (fg ÷ f): 1.0 if busy steps already run outside the full graph", "low": 0.93, "high": 1.0}
+  ]
+}

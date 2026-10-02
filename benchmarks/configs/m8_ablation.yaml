@@ -30,6 +30,7 @@ plan:
     factorial: [w, k, p, s]      # all 16 combinations: the ladder, leave-one-out, and every pair
     combos: [wf, a, akps]        # the FlashInfer control for the KV step; the INT4 branch, alone and full
     controls: [fs, g, sg, aps]   # why k and s collide (fs, g, sg); the INT4 branch without the collision
+    controls2: [f, fg]           # second round: is FlashInfer slow outside a full graph, or on multi-token passes?
     repeats: [base, wkps]        # run twice: how much two identical servers differ
     ladder: [base, w, wf, wk, wkp, wkps, akps]
   Qwen/Qwen3-0.6B:
