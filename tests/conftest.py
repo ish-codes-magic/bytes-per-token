@@ -937,6 +937,7 @@ def m7_records() -> list[dict[str, Any]]:
                 continue
             ms, nbytes = ms * unit, tokens * per_token
             contenders[name] = {**timed(ms), "cache_bytes": nbytes, "gbps": nbytes / (ms / 1e3) / 1e9}
+            contenders[name].update(eager_ms=ms + 0.2, graph_ms=ms / 2)  # Python adds 200 µs; L2 halves it
             if name.startswith("triton"):
                 contenders[name].update(error_vs_reference=2e-5, error_vs_bf16=0.01, split=512)
         if context == 512:  # launch-bound: the kernel loses
@@ -970,8 +971,8 @@ def m7_records() -> list[dict[str, Any]]:
                 row.update(top1_agreement=1.0, max_logit_diff=0.5, kl_first_step=0.01)
             add("m7_nanoserve", row, "nanoserve")
     for cache, busy in (("bf16-sdpa", 40), ("int4-kernel", 5)):
-        events = [[0, 0, 10], [1, 20, busy], [0, 20 + busy + 10, 10]]
-        names = ["gemv", "decode_attention_kernel" if cache == "int4-kernel" else "sdpa_kernel"]
+        events = [[0, 0, 10_000], [1, 20_000, busy * 1000], [0, (30 + busy) * 1000, 10_000]]  # µs
+        names = ["gemv", "decode_attention_kernel" if cache == "int4-kernel" else "fmha_cutlassF_bf16"]
         timeline = {"cache": cache, "batch": 1, "context": 16384, "names": names, "events": events}
         add("m7_timeline", timeline, "nanoserve")
     norm = {"batch": 1, "context": 128, "reference_step_ms": 60.0, "fused_step_ms": 50.0}

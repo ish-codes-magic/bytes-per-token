@@ -57,7 +57,12 @@ def summarize(times_ms: Sequence[float]) -> TimingStats:
 
 
 def cuda_time_ms(
-    fn: Callable[[], object], *, warmup: int = 10, iters: int = 50, flush_l2_bytes: int = 0
+    fn: Callable[[], object],
+    *,
+    warmup: int = 10,
+    iters: int = 50,
+    flush_l2_bytes: int = 0,
+    flush_by: str = "write",
 ) -> list[float]:
     """Run `fn` `warmup` times untimed, then `iters` times timed with CUDA events.
 
@@ -67,7 +72,14 @@ def cuda_time_ms(
     `flush_l2_bytes > 0` overwrites a scratch buffer of that size before every timed iteration, outside the
     timed region, which evicts fn's data from the L2 cache. Use it for "cold" measurements: in real decode the
     weights are far bigger than L2 and always come from memory, so warm-cache timings would flatter them.
+
+    `flush_by="read"` evicts by *reading* the scratch buffer instead. A write leaves the cache full of
+    modified lines, and fn then also pays for writing them back to memory as it evicts them (M7 measured
+    100–150 µs on the L4). In a real decode step the cache was last filled by reads of other layers, so
+    reading is the closer imitation. "write" stays the default because M0–M6 were measured with it.
     """
+    if flush_by not in ("write", "read"):
+        raise ValueError(f"flush_by must be 'write' or 'read', got {flush_by!r}")
     import torch
 
     scratch = torch.empty(flush_l2_bytes, dtype=torch.uint8, device="cuda") if flush_l2_bytes else None
@@ -78,8 +90,8 @@ def cuda_time_ms(
     starts = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     ends = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     for start, end in zip(starts, ends, strict=True):
-        if scratch is not None:
-            scratch.zero_()  # queued before `start`, so the flush itself is not timed
+        if scratch is not None:  # queued before `start`, so the flush itself is not timed
+            scratch.zero_() if flush_by == "write" else scratch.sum()
         start.record()
         fn()
         end.record()

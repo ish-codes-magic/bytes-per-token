@@ -6,7 +6,8 @@ timing:
   warmup: 10
   iters: 30
   graph_calls: 20                 # copies of an op captured in one CUDA graph (kernel 1)
-  flush_l2_bytes: 67108864        # kernel 2 only: evict the cache between runs, as the other layers would
+  flush_l2_bytes: 67108864        # kernel 2 only: evict the cache between runs (by reading 64 MiB), as
+                                  # the other layers' keys and the weights would
 
 # ---- the "before" picture ---------------------------------------------------------------------------------
 profile:                          # nanoserve's decode step, BF16 cache, PyTorch's fused attention

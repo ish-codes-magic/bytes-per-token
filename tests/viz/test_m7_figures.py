@@ -30,7 +30,7 @@ def test_every_figure_renders_with_a_data_driven_caption(m7_records, tmp_path):
     assert "not splitting is 10× slower, and the wrong warp count at that split (1) 1.4×" in tuning
 
     timeline = captions["m7_timeline.caption.txt"]  # 10 + 40 + 10 busy of 80 before; 10 + 5 + 10 of 45 after
-    assert "busy 0 of 0 ms before and 0 of 0 ms after" in timeline and "3 small kernels" in timeline
+    assert "works 60 of 80 ms before and 25 of 45 ms after" in timeline and "3 small kernels" in timeline
 
     traffic = captions["m7_traffic.caption.txt"]  # d = 1,024: 7d + 4 → 3d + 4; INT4: 148 + 512 + 512 → 148
     assert "2.3× fewer bytes per token in kernel 1 (7,172 → 3,076)" in traffic

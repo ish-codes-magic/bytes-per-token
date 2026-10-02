@@ -224,39 +224,36 @@ def tuning_landscape(m7: Records) -> tuple[plt.Figure, str]:
 
 # ---- 4. one decode step, before and after ------------------------------------------------------------------
 
-_TIMELINE_KINDS = [  # the first pattern that matches a kernel's name
+_TIMELINE_KINDS = [  # the first pattern that matches a kernel's name decides its kind
     ("kernel 2", re.compile(r"decode_attention", re.I), OKABE_ITO["orange"]),
-    ("matmul", re.compile(r"gemm|gemv|cutlass|xmma|cublas|splitk|sgemm", re.I), OKABE_ITO["blue"]),
-    (
-        "copy / index / cat",
-        re.compile(r"copy|index|gather|scatter|cat|memcpy|memset", re.I),
-        OKABE_ITO["purple"],
-    ),
+    ("PyTorch's attention kernel", re.compile(r"fmha|attention", re.I), OKABE_ITO["vermillion"]),
+    ("matmul (the weights)", re.compile(r"gemm|gemv|cutlass|xmma|cublas|splitk", re.I), OKABE_ITO["blue"]),
+    ("indexing (reading the cache out)", re.compile(r"index|gather|scatter", re.I), OKABE_ITO["purple"]),
+    ("elementwise (copies, masks, norms)", re.compile(r"elementwise", re.I), OKABE_ITO["sky_blue"]),
 ]
 _OTHER = ("everything else", BASELINE_GRAY)
 
 
+def _kind(name: str) -> tuple[str, str]:
+    return next(((label, color) for label, pattern, color in _TIMELINE_KINDS if pattern.search(name)), _OTHER)
+
+
 def step_timeline(m7: Records) -> tuple[plt.Figure, str]:
-    """Every GPU kernel of one nanoserve decode step, before and after, on one time axis."""
-    before, after = (_one(m7, "m7_timeline", cache=cache) for cache in ("bf16-sdpa", "int4-kernel"))
-    fig, axes = plt.subplots(2, 1, figsize=(12.5, 4.4), sharex=True)
+    """Every GPU kernel of one nanoserve decode step, before and after, on one time axis.
+
+    The traces come from PyTorch's profiler, which slows every launch: the steps are longer here than in
+    the timing tables, but each kernel's own duration is the GPU's.
+    """
+    traces = [_one(m7, "m7_timeline", cache=cache) for cache in ("bf16-sdpa", "int4-kernel")]
+    titles = ("before: BF16 cache, PyTorch attention", "after: INT4 codes, kernel 2")
+    fig, axes = plt.subplots(2, 1, figsize=(12.5, 5.4), sharex=True)
     totals = {}
-    for ax, trace, title in zip(
-        axes,
-        (before, after),
-        ("before: BF16 cache, PyTorch attention", "after: INT4 codes, kernel 2"),
-        strict=True,
-    ):
-        kinds = []
-        for name in trace["names"]:
-            kinds.append(
-                next(
-                    ((label, color) for label, pattern, color in _TIMELINE_KINDS if pattern.search(name)),
-                    _OTHER,
-                )
-            )
+    for ax, trace, title in zip(axes, traces, titles, strict=True):
+        kinds = [_kind(name) for name in trace["names"]]
         busy: dict[str, float] = {}
-        for label, color in dict.fromkeys(kinds):
+        for label, color in sorted(
+            set(kinds), key=lambda kind: [k[0] for k in (*_TIMELINE_KINDS, _OTHER)].index(kind[0])
+        ):
             bars = [(start / 1e3, dur / 1e3) for i, start, dur in trace["events"] if kinds[i][0] == label]
             busy[label] = sum(dur for _, dur in bars)
             ax.broken_barh(bars, (0, 1), color=color, label=f"{label}: {busy[label]:.1f} ms")
@@ -264,24 +261,20 @@ def step_timeline(m7: Records) -> tuple[plt.Figure, str]:
         totals[trace["cache"]] = (end, sum(busy.values()), len(trace["events"]))
         ax.set(yticks=[], ylim=(0, 1))
         ax.set_title(
-            f"{title} — {len(trace['events']):,} kernels, GPU busy {sum(busy.values()):.1f} of {end:.1f} ms",
+            f"{title}: {len(trace['events']):,} kernels, GPU busy {sum(busy.values()):.1f} of {end:.1f} ms",
             fontsize=10,
             loc="left",
         )
-        ax.legend(
-            fontsize=7.5, ncol=4, loc="upper right", bbox_to_anchor=(1, -0.02 if ax is axes[0] else -0.35)
-        )
+        ax.legend(fontsize=7.5, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.08))
         ax.grid(False)
-    axes[1].set_xlabel(
-        f"time within one decode step (ms), {_shape(before['batch'], before['context'])} tokens"
-    )
+    shape = _shape(traces[0]["batch"], traces[0]["context"])
+    axes[1].set_xlabel(f"time within one decode step under the profiler (ms), {shape} tokens", labelpad=38)
     fig.tight_layout()
     (b_end, b_busy, _), (a_end, a_busy, a_n) = totals["bf16-sdpa"], totals["int4-kernel"]
     caption = (
-        f"One decode step at {_shape(before['batch'], before['context'])} tokens: the GPU was busy "
-        f"{b_busy:.0f} of {b_end:.0f} ms before and {a_busy:.0f} of {a_end:.0f} ms after; what remains is "
-        f"{a_n:,} small "
-        "kernels with gaps between them, which no attention kernel can shorten."
+        f"One decode step at {shape} tokens: the GPU works {b_busy:.0f} of {b_end:.0f} ms before and "
+        f"{a_busy:.0f} of {a_end:.0f} ms after; what is left is {a_n:,} small kernels with gaps between "
+        "them (Python between launches), which no attention kernel can shorten."
     )
     return fig, caption
 

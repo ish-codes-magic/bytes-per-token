@@ -139,6 +139,7 @@ def m7_blocks(m7: list, m5: list, m4: list, configs: dict, bandwidth: float) -> 
             "m7_roofline": m7_report.roofline_table(m7, bandwidth),
             "m7_attention_error": m7_report.attention_error_table(m7),
             "m7_tune": m7_report.tune_table(m7),
+            "m7_timing_views": m7_report.timing_views_table(m7),
             "m7_nanoserve": m7_report.nanoserve_table(m7, config["dollars_per_hour"]),
             "m7_quality": m7_report.quality_table(m7, m5),
             "m7_norm_in_model": m7_report.norm_in_model_table(m7),

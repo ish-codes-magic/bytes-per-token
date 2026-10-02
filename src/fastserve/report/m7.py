@@ -369,6 +369,30 @@ def attention_error_table(m7: Records) -> str:
     return markdown_table(headers, rows)
 
 
+def timing_views_table(m7: Records, batch: int = 1) -> str:
+    """Each contender timed three ways: cold (L2 flushed), eager (from Python, warm), CUDA graph (warm).
+
+    Cold is GPU time: the flush keeps the GPU busy while Python queues the call. Eager adds Python's launch
+    overhead when the work is short. A graph replay has neither Python nor, if the data fits in L2, memory.
+    """
+    names = ["sdpa-bf16", "flashinfer-fp16", "triton-bf16", "triton-int4"]
+    rows = []
+    for m in attention_cases(m7):
+        if m["batch"] != batch or "graph_ms" not in (m["contenders"].get("triton-int4") or {}):
+            continue
+        cells = [_shape(m["batch"], m["context"])]
+        cells.append(_f(m["contenders"]["triton-int4"]["cache_bytes"] / 2**20, 1))
+        for name in names:
+            c = m["contenders"].get(name) or {}
+            views = [c.get("ms"), c.get("eager_ms"), c.get("graph_ms")]
+            cells.append(" · ".join(DASH if v is None else f"{v * 1e3:,.0f}" for v in views))
+        rows.append(cells)
+    headers = ["Batch × context", "INT4 cache (MiB)"] + [
+        ATT_LABELS[n] + ": cold · eager · graph (µs)" for n in names
+    ]
+    return markdown_table(headers, rows)
+
+
 def _e(x: float | None) -> str:
     return DASH if x is None else f"{x:.1e}"
 

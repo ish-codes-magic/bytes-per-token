@@ -41,10 +41,13 @@ def _stats(times_ms: list[float]) -> dict[str, Any]:
     return {"ms": stats.median_ms, "timing": stats.to_dict()}
 
 
-def _measure(fn: Timed, timing: dict[str, Any], *, flush: int = 0) -> dict[str, Any]:
+def _measure(fn: Timed, timing: dict[str, Any], *, flush: int = 0, by: str = "read") -> dict[str, Any]:
     """Median and spread of `fn`, or the error that stopped it: a contender that fails is recorded too."""
     try:
-        return _stats(cuda_time_ms(fn, warmup=timing["warmup"], iters=timing["iters"], flush_l2_bytes=flush))
+        times = cuda_time_ms(
+            fn, warmup=timing["warmup"], iters=timing["iters"], flush_l2_bytes=flush, flush_by=by
+        )
+        return _stats(times)
     except Exception as err:  # e.g. out of memory at the largest shape, or an unsupported dtype
         torch.cuda.empty_cache()
         return {"error": f"{type(err).__name__}: {str(err)[:200]}"}
@@ -230,13 +233,17 @@ def attention_case(
         entry = {"cache_bytes": nbytes, **extra, **_measure(fn, timing, flush=flush)}
         if "ms" in entry:
             entry["gbps"] = nbytes / (entry["ms"] / 1e3) / 1e9
-            # Two more views of the same call. `ms` above is GPU time with a cold cache: the flush keeps the
-            # GPU busy while Python queues the call, so launch overhead hides behind it.
+            # Three more views of the same call. `ms` above is GPU time with a cold cache (evicted by reading
+            # a scratch buffer): the flush keeps the GPU busy while Python queues the call, so launch overhead
+            # hides behind it.
             # eager_ms: no flush, so the GPU waits for Python: what an eager engine pays for short work.
             # graph_ms: replayed from a CUDA graph, cache warm: no Python, and no trip to memory if the data
             #           fits in L2. A kernel that is no faster here than cold was not limited by memory.
             entry["eager_ms"] = _measure(fn, timing).get("ms")
             entry["graph_ms"] = _measure_graph(fn, timing).get("ms")
+            # write_flush_ms: cold again, but the cache was evicted by writing (M0–M6's flush). The
+            #                 difference from `ms` is what evicting modified lines costs.
+            entry["write_flush_ms"] = _measure(fn, timing, flush=flush, by="write").get("ms")
             got = fn().float().reshape(batch, hq, d)
             if exact is not None:  # how far from attention over the unquantized cache
                 entry["error_vs_bf16"] = ((got - exact).norm() / exact.norm()).item()
