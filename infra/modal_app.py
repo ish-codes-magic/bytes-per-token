@@ -281,6 +281,32 @@ def m6_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     return to_plain(records)
 
 
+def _m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    import yaml
+
+    hf_cache.reload()
+
+    from fastserve.experiments.m7 import run_task
+    from fastserve.results import to_plain
+
+    config = yaml.safe_load(Path(REMOTE, config_path).read_text(encoding="utf-8"))
+    records = run_task(task, config, run_id=run_id, git=git, config_path=config_path, repo=REMOTE)
+    hf_cache.commit()  # the evaluation text, and FlashInfer's compiled kernels, for the next container
+    return to_plain(records)
+
+
+@app.function(gpu=GPU, cpu=4, memory=32768, timeout=90 * 60, volumes={CACHE: hf_cache})
+def m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """An M7 task that runs the real model in nanoserve (profile, end-to-end steps, quality)."""
+    return _m7_task(task, config_path, run_id, git)
+
+
+@app.function(image=serving_image, gpu=GPU, cpu=4, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
+def m7_serving_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
+    """An M7 microbenchmark next to what it competes with: vLLM's own ops and FlashInfer."""
+    return _m7_task(task, config_path, run_id, git)
+
+
 @app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=60 * 60, volumes={CACHE: hf_cache})
 def m5_vllm_quality(kind: str, model: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     """vLLM with an FP8 KV cache: the needle grid ("needle") or WikiText-2 perplexity ("perplexity")."""
@@ -1227,6 +1253,36 @@ def m6(config: str = "benchmarks/configs/m6_spec.yaml", steps: str = "tasks,serv
         for server in cfg["servers"]:
             if picked is None or server["name"] in picked:
                 calls.append((f"serving {server['name']}", m2_run.spawn(config, git, [server["name"]])))
+    for what, call in calls:
+        try:
+            print(
+                f"{what}: wrote {append_jsonl(out, call.get())} records to {out.relative_to(REPO)}",
+                flush=True,
+            )
+        except Exception as err:  # keep what the other containers produced
+            print(f"{what} FAILED: {type(err).__name__}: {err}", flush=True)
+
+
+@app.local_entrypoint()
+def m7(config: str = "benchmarks/configs/m7_kernels.yaml", only: str = "") -> None:
+    """M7: the kernels' profile, microbenchmarks, nanoserve runs and quality, each task in its own container.
+
+    `--only` (comma-separated) picks tasks, e.g. `--only profile,ops`. A task's `image` decides where it
+    runs: `research` (nanoserve, as M1–M6) or `serving` (next to vLLM's ops and FlashInfer).
+    """
+    from fastserve.results import append_jsonl, git_info, new_run_id
+
+    git = git_info(REPO)
+    if git["dirty"]:
+        print("warning: uncommitted changes; these results will be flagged as dirty")
+    cfg = load_config.remote(config)
+    picked = set(only.split(",")) if only else None
+    run_id, out = new_run_id(), REPO / "results" / "raw" / "m7_kernels.jsonl"
+    calls: list[tuple[str, object]] = []
+    for task, spec in cfg["tasks"].items():
+        if picked is None or task in picked:
+            fn = m7_serving_task if spec["image"] == "serving" else m7_task
+            calls.append((task, fn.spawn(task, config, run_id, git)))
     for what, call in calls:
         try:
             print(

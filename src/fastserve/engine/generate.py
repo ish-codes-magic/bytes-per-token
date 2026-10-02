@@ -15,7 +15,7 @@ from typing import Any
 
 import torch
 
-from fastserve.engine.kv_cache import ContiguousKVCache, PagedKVCache
+from fastserve.engine.kv_cache import ContiguousKVCache, KVCache, PagedKVCache
 from fastserve.engine.model import CausalLM
 from fastserve.engine.sampler import SamplingParams, sample
 
@@ -75,21 +75,24 @@ def generate_long(
     *,
     chunk: int = 512,
     generator: torch.Generator | None = None,
+    cache: KVCache | None = None,
 ) -> list[int]:
     """One long prompt: prefill it `chunk` tokens at a time through a real cache, then decode.
 
     Chunking bounds the prefill's activation memory (a 32k-token prompt in one pass needs [32k × 32k]
     attention scores per head in the reference attention). The cache makes the result identical to one pass.
+    `cache` is an empty one-row cache with room for the prompt and the output (default: contiguous BF16).
     """
     weight = model.lm_head.weight
     device = weight.device
-    cache = ContiguousKVCache(
-        model.config,
-        max_batch=1,
-        max_len=len(prompt) + params.max_new_tokens,
-        dtype=weight.dtype,
-        device=device,
-    )
+    if cache is None:
+        cache = ContiguousKVCache(
+            model.config,
+            max_batch=1,
+            max_len=len(prompt) + params.max_new_tokens,
+            dtype=weight.dtype,
+            device=device,
+        )
     ids = torch.tensor(prompt, device=device)[None]  # [1, P]
     for start in range(0, len(prompt), chunk):
         piece = ids[:, start : start + chunk]

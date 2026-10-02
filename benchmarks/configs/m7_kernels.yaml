@@ -1,0 +1,64 @@
+# M7: custom Triton kernels. Run: uv run --only-group local modal run infra/modal_app.py::m7
+# Head counts and sizes come from benchmarks/models/<model>.config.json, never from this file.
+model: Qwen/Qwen3-0.6B
+seed: 0
+timing:
+  warmup: 10
+  iters: 30
+  graph_calls: 20                 # copies of an op captured in one CUDA graph (kernel 1)
+  flush_l2_bytes: 67108864        # kernel 2 only: evict the cache between runs, as the other layers would
+
+# ---- the "before" picture ---------------------------------------------------------------------------------
+profile:                          # nanoserve's decode step, BF16 cache, PyTorch's fused attention
+  steps: 20
+  cases: [[1, 512], [1, 4096], [1, 16384], [1, 32000], [8, 4096]]   # [batch, context]
+
+# ---- kernel 1: RMSNorm + INT8 quantization ----------------------------------------------------------------
+norm_quant:
+  dtype: bfloat16
+  widths: [1024, 2048]            # hidden sizes of Qwen3-0.6B and Qwen3-1.7B
+  rows: [1, 16, 256, 4096, 32768] # tokens in the pass: decode batches, then prefill
+  tune_rows: [256, 32768]
+  num_warps: [1, 2, 4, 8, 16]
+
+# ---- kernel 2: decode attention over a quantized KV cache (one layer) -------------------------------------
+attention:
+  batches: [1, 4, 16, 64]
+  contexts: [512, 2048, 8192, 32768]
+  max_tokens: 524288              # batch × context: a BF16 cache of 2 GiB per layer, plus PyTorch's copies
+  reference_max_tokens: 131072    # the float32 reference needs several times the cache
+  bits: [16, 8, 4]                # 16: the same kernel on an unquantized cache (the control)
+  contenders: [sdpa, flashinfer, dequant]
+tune:
+  shapes: [[1, 32768], [1, 2048], [16, 2048], [64, 8192]]
+  bits: [4, 16]
+  splits: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+  num_warps: [1, 2, 4, 8]
+  iters: 15
+
+# ---- both kernels inside nanoserve ------------------------------------------------------------------------
+nanoserve:
+  steps: 20
+  cases: [[1, 512], [1, 4096], [1, 16384], [1, 32000], [8, 4096]]
+  caches: [bf16-sdpa, bf16-kernel, int8-kernel, int4-kernel, int4-dequant]   # bf16-sdpa first: the baseline
+  timeline: {case: [1, 16384], caches: [bf16-sdpa, int4-kernel]}
+quality:
+  kl: {window: 512, max_windows: 4}       # M2's WikiText-2 text, decoded token by token
+  caches: [bf16-kernel, int8-kernel, int4-kernel]
+  needle:                                 # M5's grid
+    caches: [int4-kernel]
+    lengths: [1024, 4096, 8192, 16384, 32000]
+    depths: [0.0, 0.25, 0.5, 0.75, 1.0]
+    secrets: ["4729", "8136", "2051"]
+    chunk: 512
+    max_new_tokens: 24
+
+tasks:                            # one container each; `image` picks the environment
+  profile: {kind: profile, image: research}
+  ops: {kind: norm_quant, image: serving, contenders: [torch, vllm-norm, vllm-quant, vllm-separate, vllm-fused-fp8]}
+  norm_quant: {kind: norm_quant, image: serving,
+               contenders: [torch, vllm-norm, vllm-quant, vllm-separate, vllm-fused-fp8, triton-fused]}
+  tune: {kind: tune, image: serving}
+  attention: {kind: attention, image: serving}
+  nanoserve: {kind: nanoserve, image: research}
+  quality: {kind: quality, image: research}

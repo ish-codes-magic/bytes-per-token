@@ -85,3 +85,27 @@ def cuda_time_ms(
         end.record()
     torch.cuda.synchronize()  # wait until the GPU has actually finished everything we queued
     return [start.elapsed_time(end) for start, end in zip(starts, ends, strict=True)]
+
+
+def cuda_graph_time_ms(
+    fn: Callable[[], object], *, calls: int = 20, warmup: int = 5, iters: int = 30
+) -> list[float]:
+    """Time `fn` the way a serving engine runs its decode step: captured in a CUDA graph and replayed.
+
+    A replay re-issues the recorded kernel launches with one driver call, so Python, the framework's
+    dispatch and (for Triton) the launcher's argument handling all drop out. `calls` copies of `fn` are
+    captured so the replay's own fixed cost is spread thin. Returns milliseconds per call of `fn`.
+    `fn` must not synchronize with the GPU (no `.item()`), which capture does not allow.
+    """
+    import torch
+
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):  # PyTorch requires a warm-up run on a side stream before capture
+        fn()
+    torch.cuda.current_stream().wait_stream(side)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        for _ in range(calls):
+            fn()
+    return [ms / calls for ms in cuda_time_ms(graph.replay, warmup=warmup, iters=iters)]
