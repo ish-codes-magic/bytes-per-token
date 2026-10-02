@@ -1,5 +1,12 @@
 # Gate Report: M7, custom Triton kernels
 
+> **Gate decision (2026-10-02):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.7-custom-kernels`. Two decisions on the proposed changes:
+> 1. M8 reports the custom-kernels step as nanoserve's measured step plus the labeled vLLM projection. No
+>    vLLM attention backend will be built.
+> 2. M0's and M1's cold timings are **not** re-measured with the read flush. They keep the write-flush bias,
+>    and M8's performance model must say so where it uses them.
+
 ## What was built
 
 - **The profile first** ([docs/04-kernels.md](../04-kernels.md), section 1): where nanoserve's decode step
