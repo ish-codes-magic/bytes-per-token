@@ -25,6 +25,7 @@ from fastserve.report import m4 as m4_report  # noqa: E402
 from fastserve.report import m5 as m5_report  # noqa: E402
 from fastserve.report import m6 as m6_report  # noqa: E402
 from fastserve.report import m7 as m7_report  # noqa: E402
+from fastserve.report import m8 as m8_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -151,6 +152,32 @@ def m7_blocks(m7: list, m5: list, m4: list, configs: dict, bandwidth: float) -> 
         }
     )
     return blocks
+
+
+def m8_blocks(earlier: dict[str, list], hw_records: list, configs: dict) -> dict[str, str]:
+    """The serving model: its calibration, its check against M2–M6, and what it predicts for the M8 plan."""
+    import yaml
+
+    config = yaml.safe_load(
+        (REPO / "benchmarks" / "configs" / "m8_ablation.yaml").read_text(encoding="utf-8")
+    )
+    workloads = yaml.safe_load((REPO / config["workloads_file"]).read_text(encoding="utf-8"))
+    frozen = json.loads((REPO / "benchmarks" / "predictions" / "m8_model.json").read_text(encoding="utf-8"))
+    head = config["techniques"]["s"]["head"]
+    hw = m8_report.hardware(hw_records)
+    cal = m8_report.calibration_of(frozen)
+    points = m8_report.earlier_points(
+        earlier["m2"], earlier["m4"], earlier["m5"], earlier["m6"], configs, head, workloads
+    )
+    large = ["w", "k", "p", "s", "wk", "wkp", "wkps", "akps"]
+    small = ["w", "wk", "wkp", "wkps"]
+    return {
+        "m8_calibration": m8_report.calibration_table(cal, points),
+        "m8_validation": m8_report.validation_table(points, configs, hw, cal),
+        "m8_worst": m8_report.worst_points(m8_report.modeled(points), configs, hw, cal),
+        "m8_predicted_large": m8_report.predicted_speedups(frozen, LARGE, large),
+        "m8_predicted_small": m8_report.predicted_speedups(frozen, SMALL, small),
+    }
 
 
 def compute_spend(path: Path) -> str:
@@ -287,6 +314,13 @@ def build_blocks() -> dict[str, str]:
     if kernels.exists() and kv.exists():
         m7_records = read_jsonl(kernels), read_jsonl(kv), read_jsonl(production)
         blocks.update(m7_blocks(*m7_records, configs, bandwidth))
+    model_file = REPO / "benchmarks" / "predictions" / "m8_model.json"
+    if model_file.exists() and kv.exists() and spec.exists():
+        earlier = {
+            name: read_jsonl(REPO / "results" / "raw" / f"{file}.jsonl")
+            for name, file in m8_report.EARLIER.items()
+        }
+        blocks.update(m8_blocks(earlier, latest_run(read_jsonl(probe)), configs))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
