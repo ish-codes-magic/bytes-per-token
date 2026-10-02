@@ -1,6 +1,6 @@
 {
   "milestone": "M7",
-  "written_in_commit": "pending",
+  "written_in_commit": "eb13c86",
   "note": "Written after the profile (tasks `profile` and `ops`: nanoserve's decode step, and vLLM's own norm and quantization ops) and before any timing of either kernel. Reasoning is in docs/learning/M7-triton-kernels.md, section 4. 'x faster' is the other contender's time ÷ the kernel's. Kernel 1 is compared inside a CUDA graph unless stated, as vLLM runs decode. Kernel 2 is one layer of Qwen3-0.6B (16 query heads, 8 KV heads, head dim 128), timed with the L2 cache flushed between runs.",
   "predictions": [
     {"id": "nq_graph_1", "label": "Kernel 1 vs vLLM's two ops, 1 token × 2,048, in a CUDA graph (x faster)", "low": 1.4, "high": 2.1},
