@@ -1065,6 +1065,8 @@ def m8_records() -> list[dict[str, Any]]:
             rows = [[i, 100, 50, 0.0, float(i), i + 0.05, i + 1.0, 0] for i in range(4)]
             accepted = 500.0 if "s" in on else 0.0  # of 1,000 generated: two tokens per pass
             passes = 1000.0 - accepted  # engine steps: one per pass
+            if piecewise:
+                passes /= 2  # the host's floor: a step takes twice as long as the tokens/s would suggest
             timeline = {
                 "columns": ["t", "running", "generation_tokens", "spec_accepted", "steps"],
                 "rows": [

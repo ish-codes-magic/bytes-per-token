@@ -148,18 +148,19 @@ def test_the_collision_table_puts_controls_next_to_what_they_explain(m8_records)
 
 def test_the_hosts_chain_is_read_from_the_servers_that_lost_their_graph(m8_records):
     assert m8.step_ms(m8_records, LARGE, "base") == pytest.approx(10.0)  # 1,000 steps in 10 s
-    assert m8.step_ms(m8_records, LARGE, "ks") == pytest.approx(20.0)  # 500 passes of two tokens
+    assert m8.step_ms(m8_records, LARGE, "s") == pytest.approx(20.0)  # 500 passes of two tokens
+    assert m8.step_ms(m8_records, LARGE, "ks") == pytest.approx(40.0)  # piecewise: the fixture's host floor
     assert m8.step_ms(m8_records, LARGE, "nope") is None
     table = m8.host_chain_table(m8_records)
-    assert "| Qwen3-1.7B | `g` | BF16 | FlashAttention | no | 10.0 | 10.0 (`base`) | 70 | 70 |" in table
-    assert "| Qwen3-1.7B | `fs` | BF16 | FlashInfer | yes | 20.0 | 20.0 (`s`) | 70 | 70 |" in table
-    assert "| Qwen3-1.7B | `wkps` | FP8 | FlashInfer | yes | 20.0 | 20.0 (`wps`) | 70 | 70 |" in table
+    assert "| Qwen3-1.7B | `g` | BF16 | FlashAttention | no | 20.0 | 10.0 (`base`) | 70 | 70 |" in table
+    assert "| Qwen3-1.7B | `fs` | BF16 | FlashInfer | yes | 40.0 | 20.0 (`s`) | 70 | 70 |" in table
+    assert "| Qwen3-1.7B | `wkps` | FP8 | FlashInfer | yes | 40.0 | 20.0 (`wps`) | 70 | 70 |" in table
     assert "| `base` |" not in table and "| `s` |" not in table  # servers with a full graph are not listed
-    assert m8.host_step_ms(m8_records) == pytest.approx(20.0)  # ks, wks, kps, wkps, akps
+    assert m8.host_step_ms(m8_records) == pytest.approx(40.0)  # ks, wks, kps, wkps, akps
     assert m8.host_step_ms([]) is None
     from fastserve.perfmodel.serving import Calibration
 
-    assert m8.informed_calibration(Calibration(), m8_records).host_step_s == pytest.approx(0.020)
+    assert m8.informed_calibration(Calibration(), m8_records).host_step_s == pytest.approx(0.040)
     assert m8.informed_calibration(Calibration(), []).host_step_s == 0.0
 
 
