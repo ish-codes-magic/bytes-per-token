@@ -1,0 +1,1 @@
+Fusing moves 2.3× fewer bytes per token in kernel 1 (7,172 → 3,076) and 7.9× fewer per cached token in kernel 2 (1,172 → 148); a BF16 cache costs 512 bytes for the same token.

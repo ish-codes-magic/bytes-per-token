@@ -77,7 +77,7 @@ def kernel_roofline(m7: Records, bandwidth: float) -> tuple[plt.Figure, str]:
         ylabel="cache bytes ÷ time (GB/s)",
         title="Kernel 2: decode attention",
     )
-    left.legend(fontsize=8)
+    left.legend(fontsize=8, loc="upper left", bbox_to_anchor=(0.0, 0.93))
 
     d = max(d for d, _ in norm_sizes(m7, "norm_quant"))
     for name, (label, (color, marker), line) in NQ_STYLE.items():
@@ -98,7 +98,7 @@ def kernel_roofline(m7: Records, bandwidth: float) -> tuple[plt.Figure, str]:
         ylabel="bytes moved ÷ time (GB/s)",
         title="Kernel 1: RMSNorm + quantization",
     )
-    right.legend(fontsize=8)
+    right.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
 
     def share(name: str) -> float:
@@ -133,17 +133,17 @@ def _ratio_grid(m7: Records, slow: str, fast: str) -> tuple[np.ndarray, list[int
 def speedup_heatmaps(m7: Records) -> tuple[plt.Figure, str]:
     """Kernel 2 over (batch, context): against PyTorch, against FlashInfer, and bytes vs fusion apart."""
     panels = [
-        ("INT4 kernel vs PyTorch attention (BF16)", "sdpa-bf16", "triton-int4"),
-        ("Fusion alone: BF16 kernel vs PyTorch (BF16)", "sdpa-bf16", "triton-bf16"),
-        ("Bytes alone: INT4 vs BF16, same kernel", "triton-bf16", "triton-int4"),
-        ("INT4 kernel vs FlashInfer (FP16), one request", "flashinfer-fp16", "triton-int4"),
+        ("INT4 kernel\nvs PyTorch attention (BF16)", "sdpa-bf16", "triton-int4"),
+        ("Fusion alone: BF16 kernel\nvs PyTorch attention (BF16)", "sdpa-bf16", "triton-bf16"),
+        ("Bytes alone: INT4 codes\nvs BF16, same kernel", "triton-bf16", "triton-int4"),
+        ("INT4 kernel\nvs FlashInfer (FP16), one request", "flashinfer-fp16", "triton-int4"),
     ]
     grids = [_ratio_grid(m7, slow, fast) for _, slow, fast in panels]
     top = max(float(np.nanmax(g)) for g, _, _ in grids)
     low = min(float(np.nanmin(g)) for g, _, _ in grids)
     span = max(top, 1 / low, 1.5)
     norm = LogNorm(vmin=1 / span, vmax=span)  # 1× in the middle: purple loses, orange wins
-    fig, axes = plt.subplots(1, 4, figsize=(17, 3.9))
+    fig, axes = plt.subplots(1, 4, figsize=(17, 4.2), layout="constrained")
     for ax, (title, _, _), (grid, batches, contexts) in zip(axes, panels, grids, strict=True):
         image = ax.imshow(grid, cmap="PuOr_r", norm=norm, aspect="auto")
         for i in range(len(batches)):
@@ -200,9 +200,9 @@ def tuning_landscape(m7: Records) -> tuple[plt.Figure, str]:
         labels = [f"{s:,}" + (" (no split)" if s == context else "") for s in splits]
         ax.set_yticks(range(len(splits)), labels)
         fmt = "BF16" if bits == 16 else f"INT{bits}"
-        ax.set(
-            xlabel="warps per program", ylabel="tokens per program", title=f"{fmt}, {_shape(batch, context)}"
-        )
+        ax.set(xlabel="warps per program", title=f"{fmt}, {_shape(batch, context)}")
+        if ax is axes[0][0]:
+            ax.set_ylabel("tokens per program")
         ax.grid(False)
         fig.colorbar(image, ax=ax, label="time ÷ best")
     fig.tight_layout()
@@ -238,37 +238,67 @@ def _kind(name: str) -> tuple[str, str]:
     return next(((label, color) for label, pattern, color in _TIMELINE_KINDS if pattern.search(name)), _OTHER)
 
 
+_ATTENTION_KINDS = ("kernel 2", "PyTorch's attention kernel")
+
+
+def _draw_lane(ax, trace: dict[str, Any], window: tuple[float, float] | None = None) -> dict[str, float]:
+    """One trace as colored bars on a time axis (ms). Returns GPU-busy ms per kind of kernel."""
+    kinds = [_kind(name) for name in trace["names"]]
+    order = [kind[0] for kind in (*_TIMELINE_KINDS, _OTHER)]
+    busy: dict[str, float] = {}
+    for label, color in sorted(set(kinds), key=lambda kind: order.index(kind[0])):
+        bars = [(start / 1e3, dur / 1e3) for i, start, dur in trace["events"] if kinds[i][0] == label]
+        busy[label] = sum(dur for _, dur in bars)
+        # No edge: a 5 µs kernel must not be drawn a pixel wide, or a mostly idle GPU looks busy.
+        ax.broken_barh(
+            bars, (0, 1), facecolors=color, edgecolor="none", label=f"{label}: {busy[label]:.1f} ms"
+        )
+    if window is not None:
+        ax.set_xlim(*window)
+    ax.set(yticks=[], ylim=(0, 1))
+    ax.grid(False)
+    return busy
+
+
+def _one_layer(trace: dict[str, Any]) -> tuple[float, float] | None:
+    """The stretch between two consecutive attention kernels in the middle of the step: one layer (ms)."""
+    kinds = [_kind(name)[0] for name in trace["names"]]
+    starts = [start / 1e3 for i, start, _ in trace["events"] if kinds[i] in _ATTENTION_KINDS]
+    middle = len(starts) // 2
+    return (starts[middle], starts[middle + 1]) if len(starts) > middle + 1 else None
+
+
 def step_timeline(m7: Records) -> tuple[plt.Figure, str]:
-    """Every GPU kernel of one nanoserve decode step, before and after, on one time axis.
+    """Every GPU kernel of one nanoserve decode step, before and after: the whole step, and one layer of it.
 
     The traces come from PyTorch's profiler, which slows every launch: the steps are longer here than in
     the timing tables, but each kernel's own duration is the GPU's.
     """
     traces = [_one(m7, "m7_timeline", cache=cache) for cache in ("bf16-sdpa", "int4-kernel")]
     titles = ("before: BF16 cache, PyTorch attention", "after: INT4 codes, kernel 2")
-    fig, axes = plt.subplots(2, 1, figsize=(12.5, 5.4), sharex=True)
+    fig, axes = plt.subplots(2, 2, figsize=(13.5, 5.6), gridspec_kw={"width_ratios": [2.2, 1]})
     totals = {}
-    for ax, trace, title in zip(axes, traces, titles, strict=True):
-        kinds = [_kind(name) for name in trace["names"]]
-        busy: dict[str, float] = {}
-        for label, color in sorted(
-            set(kinds), key=lambda kind: [k[0] for k in (*_TIMELINE_KINDS, _OTHER)].index(kind[0])
-        ):
-            bars = [(start / 1e3, dur / 1e3) for i, start, dur in trace["events"] if kinds[i][0] == label]
-            busy[label] = sum(dur for _, dur in bars)
-            ax.broken_barh(bars, (0, 1), color=color, label=f"{label}: {busy[label]:.1f} ms")
+    for (whole, zoom), trace, title in zip(axes, traces, titles, strict=True):
+        busy = _draw_lane(whole, trace)
         end = max(start + dur for _, start, dur in trace["events"]) / 1e3
         totals[trace["cache"]] = (end, sum(busy.values()), len(trace["events"]))
-        ax.set(yticks=[], ylim=(0, 1))
-        ax.set_title(
+        whole.set_title(
             f"{title}: {len(trace['events']):,} kernels, GPU busy {sum(busy.values()):.1f} of {end:.1f} ms",
             fontsize=10,
             loc="left",
         )
-        ax.legend(fontsize=7.5, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.08))
-        ax.grid(False)
+        below = -0.22 if whole is axes[0][0] else -0.42  # the bottom row's legend clears its x label
+        whole.legend(fontsize=7.5, ncol=3, loc="upper center", bbox_to_anchor=(0.5, below))
+        window = _one_layer(trace)
+        _draw_lane(zoom, trace, window)
+        layer = f"one layer ({window[1] - window[0]:.2f} ms)" if window else "the same step"
+        zoom.set_title(f"zoom: {layer}", fontsize=10, loc="left")
     shape = _shape(traces[0]["batch"], traces[0]["context"])
-    axes[1].set_xlabel(f"time within one decode step under the profiler (ms), {shape} tokens", labelpad=38)
+    for ax in axes[1]:
+        ax.set_xlabel("time under the profiler (ms)")
+    fig.suptitle(
+        f"One nanoserve decode step, {shape} tokens: every GPU kernel", fontsize=11, x=0.01, ha="left"
+    )
     fig.tight_layout()
     (b_end, b_busy, _), (a_end, a_busy, a_n) = totals["bf16-sdpa"], totals["int4-kernel"]
     caption = (
@@ -377,16 +407,23 @@ def waterfall_v4(m7: Records, dollars_per_hour: float) -> tuple[plt.Figure, str]
             title=f"nanoserve, Qwen3-0.6B, {_shape(batch, context)} tokens", ylabel="$ per 1M output tokens"
         )
         ax.set_ylim(0, max(cost for _, cost in bars) * 1.15)
+        ax.set_axisbelow(True)
         found[(batch, context)] = {cache: cost / base - 1 for cache, cost in bars[1:]}
     fig.tight_layout()
     batch, context = max(cases, key=lambda c: c[1])  # the caption is about the longest context
     changes = found[(batch, context)]
     kl = _one(m7, "m7_kl", cache="int4-kernel")
     quality = f" (KL {kl['mean_kl']:.2g} from the BF16 cache)" if kl else ""
+    smaller = (
+        step(m7, "bf16-kernel", batch, context)["kv_bytes"]
+        / step(m7, "int4-kernel", batch, context)["kv_bytes"]
+    )
     caption = (
         f"Waterfall v4, nanoserve at {_shape(batch, context)} tokens: reading the same BF16 cache with "
         f"kernel 2 changes cost by {changes['bf16-kernel']:+.0%}, and INT4 codes by "
-        f"{changes['int4-kernel']:+.0%}{quality}; the bars are nanoserve's, not vLLM's."
+        f"{changes['int4-kernel']:+.0%}{quality}: once attention is fused the step is bound by Python's "
+        f"launches, so INT4 buys a {smaller:.1f}× smaller cache, not time. These bars are nanoserve's, "
+        "not vLLM's."
     )
     return fig, caption
 

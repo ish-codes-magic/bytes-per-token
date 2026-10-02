@@ -40,6 +40,7 @@ def test_every_figure_renders_with_a_data_driven_caption(m7_records, tmp_path):
     waterfall = captions["m7_waterfall.caption.txt"]  # 140 → 70 ms and 140 → 56 ms per token
     assert "nanoserve at 1 × 32,000 tokens" in waterfall
     assert "kernel 2 changes cost by -50%, and INT4 codes by -60% (KL 0.02" in waterfall
+    assert "INT4 buys a 3.5× smaller cache, not time" in waterfall  # 114,688 → 33,152 bytes per token
 
 
 def test_figures_missing_their_data_are_skipped_not_fatal(m7_records, tmp_path):

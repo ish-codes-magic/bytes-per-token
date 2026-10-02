@@ -1,0 +1,1 @@
+Waterfall v4, nanoserve at 1 × 32,000 tokens: reading the same BF16 cache with kernel 2 changes cost by -61%, and INT4 codes by -62% (KL 0.011 from the BF16 cache): once attention is fused the step is bound by Python's launches, so INT4 buys a 3.5× smaller cache, not time. These bars are nanoserve's, not vLLM's.

@@ -1,0 +1,1 @@
+For INT4 at 1 × 32,768 the best cell is 128 tokens per program with 1 warp (2,048 programs): not splitting is 22× slower, and the wrong warp count at that split (8) 3.0×.
