@@ -1,6 +1,11 @@
 # Gate Report: M8, the full stack
 
-> **Awaiting the owner's decision.** Not tagged. Two things need an answer before M9 (last section).
+> **Gate decision (2026-10-02):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.8-full-stack`. On the two decisions asked for below:
+> 1. **Budget:** agreed. M9's quick reproduce regenerates the figures from the committed raw results without
+>    a GPU. The full reproduction is written and documented, not run.
+> 2. **The open question** (why FP8 weights double the host's time on piecewise graphs): not run now. The
+>    owner will run it later; the exact command is kept in the repository (M9).
 
 ## What was built
 
