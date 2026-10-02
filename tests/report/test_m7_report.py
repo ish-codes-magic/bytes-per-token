@@ -120,3 +120,30 @@ def test_nanoserve_and_quality_tables(m7_records, m5_records):
     quality = quality_table(m7_records, m5_records)
     assert "| INT4 codes + kernel 2 | 0.02 | 98.0% | 20.02 | 20.00 |" in quality and "| 100% |" in quality
     assert "| Kernel 1 | 50.0 | 0.010 | 100% |" in norm_in_model_table(m7_records)
+
+
+def test_projection_adds_layers_of_attention_to_the_short_step(m7_records, m5_records, m4_records):
+    from fastserve.report.m4 import serving
+    from fastserve.report.m7 import vllm_projection_table
+
+    model = "Qwen/Qwen3-0.6B"
+    table = vllm_projection_table(m7_records, m5_records, m4_records, SimpleNamespace(num_layers=10), model)
+    short = serving(m4_records, model, "bf16", "decode", concurrency=1)["summary"]["tpot_ms"]["p50"]
+    assert f"Short-context step: {short:.1f} ms; 10 layers" in table
+    # 10 layers × 0.35 ms of attention on top of the short step; nothing to compare it with in vLLM
+    assert f"| Kernel 2, INT4 codes | 350 | {short + 3.5:.1f} | — | — |" in table
+    assert f"| FlashInfer, full-precision cache | 700 | {short + 7.0:.1f} |" in table
+    assert "| vLLM's FP8 cache (measured only) | — | — |" in table
+
+
+def test_prediction_score_counts_what_the_table_shows():
+    from fastserve.report.tables import prediction_score
+
+    ranges = [
+        {"id": "a", "low": 1, "high": 2},
+        {"id": "b", "low": 1, "high": 2},
+        {"id": "c", "low": 0, "high": 1},
+    ]
+    predictions = {"predictions": [*ranges, {"id": "d", "point": 3}]}
+    observed = {"a": 1.5, "b": 3.0, "c": None, "d": 3}  # c wasn't measured, d isn't a range: neither counts
+    assert prediction_score(predictions, observed) == "**1 of 2 predictions in range.**"

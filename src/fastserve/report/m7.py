@@ -607,6 +607,62 @@ def production_context_table(m7: Records, m5: Records, cfg: Any, vllm_context: i
     )
 
 
+def vllm_projection_table(
+    m7: Records, m5: Records, m4: Records, cfg: Any, model: str, context: int = 32768
+) -> str:
+    """What the one-layer timings imply for vLLM's long-context decode step. A projection, not a measurement.
+
+    projected step = vLLM's short-context step (M4, batch 1: weights and overhead, almost no KV)
+                     + layers × one layer's attention at `context` tokens (cold)
+
+    The first row checks the method where vLLM *was* measured: FlashInfer on a full-precision cache (M5's
+    `long_32k` workload). The kernel 2 rows have no measured counterpart: it is not integrated into vLLM.
+    """
+    base = m4_report.serving(m4, model, "bf16", "decode", concurrency=1)
+    short = (base or {}).get("summary", {}).get("tpot_ms", {}).get("p50")
+    if short is None:
+        return DASH
+
+    def measured(server: str) -> float | None:
+        found = None
+        for m in _rows(m5, "serving"):
+            if (m["model"], m["server"], m["workload"]) == (model, server, "long_32k"):
+                found = (m["summary"].get("tpot_ms") or {}).get("p50")
+        return found
+
+    rows = []
+    contenders = [
+        ("flashinfer-fp16", "FlashInfer, full-precision cache", "bf16kv-flashinfer"),
+        ("triton-bf16", "Kernel 2, BF16 cache", None),
+        ("triton-int8", "Kernel 2, INT8 codes", None),
+        ("triton-int4", "Kernel 2, INT4 codes", None),
+    ]
+    for name, label, server in contenders:
+        layer = att(m7, 1, context, name)
+        if layer is None:
+            continue
+        projected, got = short + cfg.num_layers * layer, measured(server) if server else None
+        rows.append(
+            [
+                label,
+                _f(layer * 1e3, 0),
+                _f(projected, 1),
+                _f(got, 1),
+                _f(100 * (projected / got - 1), 1, "%") if got else DASH,
+            ]
+        )
+    rows.append(["vLLM's FP8 cache (measured only)", DASH, DASH, _f(measured("fp8kv"), 1), DASH])
+    headers = [
+        "Attention kernel and cache",
+        "One layer (µs)",
+        "Projected vLLM step (ms)",
+        "Measured in vLLM (ms)",
+        "Projection error",
+    ]
+    note = f"*Short-context step: {short:.1f} ms; {cfg.num_layers} layers.*"
+    return note + "\n\n" + markdown_table(headers, rows)
+
+
 # ---- predictions -------------------------------------------------------------------------------------------
 
 

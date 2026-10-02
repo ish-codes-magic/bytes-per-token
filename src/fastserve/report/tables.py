@@ -88,6 +88,13 @@ def _sig(x: float) -> str:
     return f"{x:,.3g}" if abs(x) < 1000 else f"{x:,.0f}"
 
 
+def prediction_score(predictions: dict[str, Any], observed: dict[str, float | None]) -> str:
+    """ "21 of 29 predictions in range", counted from the same data as the table (never by hand)."""
+    ranged = [p for p in predictions["predictions"] if "low" in p and observed.get(p["id"]) is not None]
+    hits = sum(p["low"] <= observed[p["id"]] <= p["high"] for p in ranged)
+    return f"**{hits} of {len(ranged)} predictions in range.**"
+
+
 def prediction_table(predictions: dict[str, Any], observed: dict[str, float | None]) -> str:
     """Predicted vs measured, one row per prediction, with an automatic verdict.
 

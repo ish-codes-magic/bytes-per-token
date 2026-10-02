@@ -57,6 +57,7 @@ from fastserve.report.tables import (  # noqa: E402
     decode_matmul_table,
     hw_summary,
     model_facts,
+    prediction_score,
     prediction_table,
 )
 from fastserve.results import latest_run, read_jsonl  # noqa: E402
@@ -131,6 +132,8 @@ def m7_blocks(m7: list, m5: list, m4: list, configs: dict, bandwidth: float) -> 
     blocks.update(
         {
             "m7_predictions": prediction_table(predictions, observed),
+            "m7_prediction_score": prediction_score(predictions, observed),
+            "m7_projection": m7_report.vllm_projection_table(m7, m5, m4, configs[SMALL], SMALL),
             "m7_norm_quant": m7_report.norm_quant_table(m7, "graph"),
             "m7_norm_quant_eager": m7_report.norm_quant_table(m7, "eager"),
             "m7_norm_exact": m7_report.norm_exactness_table(m7),
