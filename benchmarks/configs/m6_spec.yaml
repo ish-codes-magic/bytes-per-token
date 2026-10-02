@@ -14,14 +14,14 @@ reference:
   highlight_k: 4
 drafters:
   small: {}                                       # Qwen3-0.6B, BF16
-  small-awq: {compressed: /cache/m4/Qwen3-0.6B-awq}   # M4's INT4 drafter: cheaper per step, less accurate?
+  small-awq: {compressed: ishita-codes-ai/Qwen3-0.6B-W4A16-AWQ}   # M4's INT4 drafter: cheaper per step, less accurate?
   ngram: {ngram: true, max_n: 4, min_n: 2}        # prompt lookup: no model at all
 tasks:                                            # one container each
   agree_bf16: {kind: agreement, drafts: [small, small-awq, ngram], highlight: [small, ngram]}
   # The interaction experiment: does quantizing the TARGET make the same drafter's guesses wrong more often?
   agree_fp8: {kind: agreement, drafts: [small],
-              target: {name: fp8, compressed: /cache/m4/Qwen3-1.7B-fp8, format: fp8, act: token}}
-  agree_awq: {kind: agreement, drafts: [small], target: {name: awq, compressed: /cache/m4/Qwen3-1.7B-awq}}
+              target: {name: fp8, compressed: ishita-codes-ai/Qwen3-1.7B-FP8-Dynamic, format: fp8, act: token}}
+  agree_awq: {kind: agreement, drafts: [small], target: {name: awq, compressed: ishita-codes-ai/Qwen3-1.7B-W4A16-AWQ}}
   loop: {kind: loop, draft: small, k: 4, prompts_per_task: 4, max_new_tokens: 96, dtypes: [bfloat16, float32]}
   lossless: {kind: lossless, draft: small, k: 3, samples: 600, tokens: 3, dtypes: [bfloat16, float32],
              plain_batch: {bfloat16: 50, float32: 20}}   # float32 doubles every KV cache
@@ -45,7 +45,7 @@ servers:                                          # labels: <target>-<method>[-k
   - {name: bf16-draft-k5, label: bf16-draft-k5, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
      speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 5}}
   - {name: bf16-draftawq-k3, label: bf16-draftawq-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
-     speculative: {method: draft_model, model: /cache/m4/Qwen3-0.6B-awq, num_speculative_tokens: 3}}
+     speculative: {method: draft_model, model: ishita-codes-ai/Qwen3-0.6B-W4A16-AWQ, num_speculative_tokens: 3}}
   - {name: bf16-ngram-k3, label: bf16-ngram-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
      speculative: {method: ngram, num_speculative_tokens: 3, prompt_lookup_max: 4, prompt_lookup_min: 2}}
   - {name: bf16-ngram-k6, label: bf16-ngram-k6, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
@@ -53,14 +53,14 @@ servers:                                          # labels: <target>-<method>[-k
   - {name: bf16-eagle3-k3, label: bf16-eagle3-k3, model: Qwen/Qwen3-1.7B, args: [--no-enable-prefix-caching],
      speculative: {method: eagle3, model: AngelSlim/Qwen3-1.7B_eagle3, num_speculative_tokens: 3}}
   # The interaction experiment in production: the same drafter against M4's quantized targets
-  - {name: fp8-none, label: fp8-none, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+  - {name: fp8-none, label: fp8-none, model: Qwen/Qwen3-1.7B, path: ishita-codes-ai/Qwen3-1.7B-FP8-Dynamic,
      args: [--no-enable-prefix-caching]}
-  - {name: fp8-draft-k3, label: fp8-draft-k3, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+  - {name: fp8-draft-k3, label: fp8-draft-k3, model: Qwen/Qwen3-1.7B, path: ishita-codes-ai/Qwen3-1.7B-FP8-Dynamic,
      args: [--no-enable-prefix-caching],
      speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 3}}
-  - {name: awq-none, label: awq-none, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-awq,
+  - {name: awq-none, label: awq-none, model: Qwen/Qwen3-1.7B, path: ishita-codes-ai/Qwen3-1.7B-W4A16-AWQ,
      args: [--no-enable-prefix-caching]}
-  - {name: awq-draft-k3, label: awq-draft-k3, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-awq,
+  - {name: awq-draft-k3, label: awq-draft-k3, model: Qwen/Qwen3-1.7B, path: ishita-codes-ai/Qwen3-1.7B-W4A16-AWQ,
      args: [--no-enable-prefix-caching],
      speculative: {method: draft_model, model: Qwen/Qwen3-0.6B, num_speculative_tokens: 3}}
 loads:

@@ -108,8 +108,8 @@ def run_serving(
 ) -> list[dict[str, Any]]:
     """Every server in the config (or just those whose `name` is in `only`), every workload, every load point.
 
-    A server entry may give `path` (a local checkpoint, e.g. a quantized one); otherwise the model comes from
-    the Hugging Face cache.
+    A server entry may give `path`: a quantized checkpoint, as a Hub id (downloaded once into the cache) or
+    a local folder. Otherwise the model itself comes from the Hugging Face cache.
     """
     run_id, env, seed = new_run_id(), environment_info(), config["seed"]
     slo = config["slo"]
@@ -126,7 +126,8 @@ def run_serving(
         if only is not None and server_cfg.get("name", server_cfg["label"]) not in only:
             continue
         model, label, args = server_cfg["model"], server_cfg["label"], server_cfg.get("args", [])
-        path = server_cfg.get("path") or model_dir(model)
+        path = server_cfg.get("path") or model
+        path = path if path.startswith("/") else model_dir(path, download=path != model)
         env = server_cfg.get("env")
         args = [*args, *_speculative_args(server_cfg.get("speculative"))]
         with VLLMServer(path, served_name=model, extra_args=args, env=env) as server:

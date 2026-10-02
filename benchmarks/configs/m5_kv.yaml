@@ -42,7 +42,7 @@ servers:
      args: [--no-enable-prefix-caching, --attention-backend, FLASHINFER]}
   - {name: 0.6b-fp8kv, label: fp8kv, model: Qwen/Qwen3-0.6B, workloads: [saturation, capacity, long_32k],
      args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
-  - {name: 0.6b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-0.6B, path: /cache/m4/Qwen3-0.6B-fp8,
+  - {name: 0.6b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-0.6B, path: ishita-codes-ai/Qwen3-0.6B-FP8-Dynamic,
      workloads: [saturation, capacity, long_32k], args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
   - {name: 1.7b-bf16kv, label: bf16kv, model: Qwen/Qwen3-1.7B, workloads: [saturation, capacity, long_32k],
      args: [--no-enable-prefix-caching]}
@@ -50,7 +50,7 @@ servers:
      args: [--no-enable-prefix-caching, --attention-backend, FLASHINFER]}
   - {name: 1.7b-fp8kv, label: fp8kv, model: Qwen/Qwen3-1.7B, workloads: [saturation, capacity, long_32k],
      args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
-  - {name: 1.7b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-1.7B, path: /cache/m4/Qwen3-1.7B-fp8,
+  - {name: 1.7b-fp8w-fp8kv, label: fp8w-fp8kv, model: Qwen/Qwen3-1.7B, path: ishita-codes-ai/Qwen3-1.7B-FP8-Dynamic,
      workloads: [saturation, capacity, long_32k], args: [--no-enable-prefix-caching, --kv-cache-dtype, fp8]}
   # Prefix caching: one load per workload, so no load replays requests into a cache that already holds them
   - {name: 0.6b-prefix-off, label: prefix-off, model: Qwen/Qwen3-0.6B, workloads: [multi_turn, shared_prefix],
