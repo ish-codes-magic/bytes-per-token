@@ -1060,120 +1060,10 @@ def render_figures(milestone: str, raw: dict[str, list[dict]]) -> dict[str, byte
     """Draw one milestone's figures from its raw records; returns {file name: bytes}."""
     import tempfile
 
-    from fastserve.engine.config import ModelConfig
-    from fastserve.viz import hw_figures, m1_figures, m2_figures
+    from fastserve.viz.render import render
 
     with tempfile.TemporaryDirectory() as tmp:
-        if milestone == "m0":
-            written = hw_figures.make_all(raw["hw"], tmp)
-        elif milestone == "m1":
-            name = raw["m1"][0]["config"]["model"].split("/")[-1]
-            cfg = ModelConfig.from_pretrained_json(
-                Path(REMOTE, "benchmarks", "models", f"{name}.config.json")
-            )
-            written = m1_figures.make_all(raw["m1"], raw["hw"], cfg, tmp)
-        elif milestone == "m2":
-            written = m2_figures.make_all(raw["m2"], tmp)
-            if raw.get("m2q"):
-                written += m2_figures.make_quality(raw["m2q"], tmp)
-            if raw.get("m2sat"):
-                from fastserve.hw.analysis import measured_bandwidth
-
-                configs = {
-                    model: ModelConfig.from_pretrained_json(
-                        Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
-                    )
-                    for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")
-                }
-                bandwidth = measured_bandwidth(raw["hw"])
-                written += m2_figures.make_saturation(raw["m2sat"], configs, bandwidth, tmp)
-        elif milestone == "m3":
-            from fastserve.viz import m3_figures
-
-            written = m3_figures.make_all(raw["m3"], tmp)
-        elif milestone == "m4":
-            from fastserve.hw.analysis import measured_bandwidth, measured_peak_flops
-            from fastserve.viz import m4_figures
-
-            configs = {
-                model: ModelConfig.from_pretrained_json(
-                    Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
-                )
-                for model in ("Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")
-            }
-            peaks = measured_peak_flops(raw["hw"])
-            hw = {"bandwidth": measured_bandwidth(raw["hw"]), "bf16": peaks["bf16"], "fp8": peaks["fp8"]}
-            written = m4_figures.make_all(raw["m4"], configs, hw, tmp)
-        elif milestone == "m5":
-            import yaml
-
-            from fastserve.viz import m5_figures
-
-            config = yaml.safe_load(
-                Path(REMOTE, "benchmarks", "configs", "m5_kv.yaml").read_text(encoding="utf-8")
-            )
-            workloads = yaml.safe_load(Path(REMOTE, config["workloads_file"]).read_text(encoding="utf-8"))
-            cfg = ModelConfig.from_pretrained_json(
-                Path(REMOTE, "benchmarks", "models", "Qwen3-0.6B.config.json")
-            )
-            written = m5_figures.make_all(raw["m5"], config["policies"], cfg, workloads, tmp)
-        elif milestone == "m6":
-            from fastserve.viz import m6_figures
-
-            written = m6_figures.make_all(raw["m6"], tmp)
-        elif milestone == "m7":
-            import yaml
-
-            from fastserve.hw.analysis import measured_bandwidth
-            from fastserve.viz import m7_figures
-
-            config = yaml.safe_load(
-                Path(REMOTE, "benchmarks", "configs", "m5_kv.yaml").read_text(encoding="utf-8")
-            )  # the price of an L4 hour, as in M5's cost tables
-            cfg = ModelConfig.from_pretrained_json(
-                Path(REMOTE, "benchmarks", "models", "Qwen3-0.6B.config.json")
-            )
-            bandwidth = measured_bandwidth(raw["hw"])
-            written = m7_figures.make_all(raw["m7"], bandwidth, cfg, config["dollars_per_hour"], tmp)
-        elif milestone == "m8":
-            import yaml
-
-            from fastserve.report import m8 as m8_report
-            from fastserve.viz import m8_figures
-
-            config = yaml.safe_load(
-                Path(REMOTE, "benchmarks", "configs", "m8_ablation.yaml").read_text(encoding="utf-8")
-            )
-            frozen = json.loads(
-                Path(REMOTE, "benchmarks", "predictions", "m8_model.json").read_text(encoding="utf-8")
-            )
-            configs = {
-                model: ModelConfig.from_pretrained_json(
-                    Path(REMOTE, "benchmarks", "models", f"{model.split('/')[-1]}.config.json")
-                )
-                for model in (m8_report.SMALL, m8_report.LARGE)
-            }
-            perplexity = {
-                model: m8_report.perplexities(raw["m8"], raw["m5"], raw["m4"], model) for model in configs
-            }
-            projected = {}
-            for model in configs:
-                found = m8_report.kernel_projection(raw["m8"], raw["m7"], configs, model)
-                if found:
-                    projected[model] = found["tok_s"]
-            written = m8_figures.make_all(
-                raw["m8"],
-                frozen,
-                configs,
-                m8_report.hardware(raw["hw"]),
-                config["dollars_per_hour"],
-                perplexity,
-                config["techniques"]["s"]["head"],
-                projected,
-                tmp,
-            )
-        else:
-            raise ValueError(f"unknown milestone {milestone!r}")
+        written = render(milestone, raw, REMOTE, tmp)
         return {path.name: path.read_bytes() for path in written}
 
 
@@ -1295,41 +1185,13 @@ def m2q(config: str = "benchmarks/configs/m2_quality.yaml", tasks: str = "perple
 
 @app.local_entrypoint()
 def figures(milestone: str = "all") -> None:
-    from fastserve.results import latest_run, read_jsonl
+    """Draw the figures in a cloud container. (`scripts/make_figures.py` does the same on any machine.)"""
+    from fastserve.viz.render import available, load_raw
 
-    raw_dir = REPO / "results" / "raw"
-    raw = {
-        key: latest_run(read_jsonl(raw_dir / file))
-        for key, file in (
-            ("hw", "hw_probe.jsonl"),
-            ("m1", "m1_nanoserve.jsonl"),
-            ("m2", "m2_serving.jsonl"),
-            ("m2sat", "m2_saturation.jsonl"),
-        )
-        if (raw_dir / file).exists()
-    }
-    quality = raw_dir / "m2_quality.jsonl"
-    if quality.exists():  # gathered from one container per (task, model): keep the newest of each
-        from fastserve.report.m2 import newest_per_model
-
-        raw["m2q"] = newest_per_model(read_jsonl(quality))
-    for key, file in (
-        ("m3", "m3_quant.jsonl"),
-        ("m4", "m4_production.jsonl"),
-        ("m5", "m5_kv.jsonl"),
-        ("m6", "m6_spec.jsonl"),
-        ("m7", "m7_kernels.jsonl"),
-        ("m8", "m8_ablation.jsonl"),
-    ):
-        if (
-            raw_dir / file
-        ).exists():  # every run: tasks can be re-run, and the reports keep the newest result
-            raw[key] = read_jsonl(raw_dir / file)
+    raw = load_raw(REPO / "results" / "raw")
     out = REPO / "results" / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    for ms in ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"] if milestone == "all" else [milestone]:
-        if ms != "m0" and ms not in raw:
-            continue
+    for ms in available(raw) if milestone == "all" else [milestone]:
         for name, data in render_figures.remote(ms, raw).items():
             (out / name).write_bytes(data)
             print(f"wrote results/figures/{name}")
