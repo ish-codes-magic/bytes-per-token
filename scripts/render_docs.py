@@ -24,6 +24,7 @@ from fastserve.hw.analysis import (  # noqa: E402
 from fastserve.report import m4 as m4_report  # noqa: E402
 from fastserve.report import m5 as m5_report  # noqa: E402
 from fastserve.report import m6 as m6_report  # noqa: E402
+from fastserve.report import m7 as m7_report  # noqa: E402
 from fastserve.report.m1 import m1_observables, parity_table, profile_table, speed_table  # noqa: E402
 from fastserve.report.m2 import (  # noqa: E402
     LARGE,
@@ -112,6 +113,39 @@ def m6_blocks(m6: list) -> dict[str, str]:
         "m6_interaction": m6_report.interaction_table(m6),
         "m6_round_costs": m6_report.round_cost_table(m6),
     }
+
+
+def m7_blocks(m7: list, m5: list, m4: list, configs: dict, bandwidth: float) -> dict[str, str]:
+    import yaml
+
+    predictions = json.loads((REPO / "benchmarks" / "predictions" / "m7.json").read_text(encoding="utf-8"))
+    config = yaml.safe_load((REPO / "benchmarks" / "configs" / "m5_kv.yaml").read_text(encoding="utf-8"))
+    blocks = {
+        "m7_profile": m7_report.profile_table(m7, bandwidth),
+        "m7_ops_profile": m7_report.ops_profile_table(m7),
+        "m7_m4_gap": m7_report.m4_gap_table(m7, m4, configs, bandwidth),
+    }
+    if not any(r["experiment"] == "m7_attention" for r in m7):  # only the profile has run so far
+        return blocks
+    observed = m7_report.m7_observables(m7, bandwidth)
+    blocks.update(
+        {
+            "m7_predictions": prediction_table(predictions, observed),
+            "m7_norm_quant": m7_report.norm_quant_table(m7, "graph"),
+            "m7_norm_quant_eager": m7_report.norm_quant_table(m7, "eager"),
+            "m7_norm_exact": m7_report.norm_exactness_table(m7),
+            "m7_norm_warps": m7_report.norm_warps_table(m7),
+            "m7_attention": m7_report.attention_table(m7),
+            "m7_roofline": m7_report.roofline_table(m7, bandwidth),
+            "m7_attention_error": m7_report.attention_error_table(m7),
+            "m7_tune": m7_report.tune_table(m7),
+            "m7_nanoserve": m7_report.nanoserve_table(m7, config["dollars_per_hour"]),
+            "m7_quality": m7_report.quality_table(m7, m5),
+            "m7_norm_in_model": m7_report.norm_in_model_table(m7),
+            "m7_production": m7_report.production_context_table(m7, m5, configs[SMALL]),
+        }
+    )
+    return blocks
 
 
 def compute_spend(path: Path) -> str:
@@ -244,6 +278,10 @@ def build_blocks() -> dict[str, str]:
     spec = REPO / "results" / "raw" / "m6_spec.jsonl"
     if spec.exists():
         blocks.update(m6_blocks(read_jsonl(spec)))
+    kernels = REPO / "results" / "raw" / "m7_kernels.jsonl"
+    if kernels.exists() and kv.exists():
+        m7_records = read_jsonl(kernels), read_jsonl(kv), read_jsonl(production)
+        blocks.update(m7_blocks(*m7_records, configs, bandwidth))
     spend = REPO / "results" / "compute_log.csv"
     if spend.exists():
         blocks["compute_spend"] = compute_spend(spend)
