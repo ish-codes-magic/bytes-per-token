@@ -1141,33 +1141,197 @@ def kernel_projection_table(m8: Records, m7: Records, configs: dict[str, Any]) -
 
 
 def cost_table(m8: Records, dollars_per_hour: float) -> str:
-    """The final cost table: $ per 1M output tokens, stock BF16 against the full stack, per workload."""
+    """The final cost table: $ per 1M output tokens for stock BF16, the full stack, and the best stack."""
     rows = []
     for model in (SMALL, LARGE):
         for workload in WORKLOADS:
             base, full = tok_s(m8, model, BASE, workload), tok_s(m8, model, FULL, workload)
             if not base:
                 continue
-            int4 = tok_s(m8, model, "akps", workload)
+            top = best(m8, model, workload, allow_int4=False)
             rows.append(
                 [
                     model.split("/")[-1],
                     WORKLOAD_LABELS[workload],
                     _f(dollars(base, dollars_per_hour), 2),
                     _f(dollars(full, dollars_per_hour), 2),
-                    _f(base and full and full / base, 2, "×") if full else DASH,
-                    _f(dollars(int4, dollars_per_hour), 2),
+                    _f(full / base, 2, "×") if full else DASH,
+                    f"`{top[0]}`" if top else DASH,
+                    _f(dollars(top[1], dollars_per_hour), 2) if top else DASH,
+                    _f(top[1] / base, 2, "×") if top else DASH,
                 ]
             )
     headers = [
         "Model",
         "Workload",
         "Stock BF16 ($ per 1M)",
-        "Full stack ($ per 1M)",
+        "Full stack `wkps` ($ per 1M)",
         "Cheaper by",
-        "Full stack with INT4 weights ($ per 1M)",
+        "Best measured stack",
+        "Its $ per 1M",
+        "Cheaper by",
     ]
     return markdown_table(headers, rows)
+
+
+# ---- the best stack per workload, and why the full stack is not it -----------------------------------------
+
+DEPLOYABLE = "wakps"  # the letters that are techniques; f and g exist only as controls
+
+
+def candidates(m8: Records, model: str, allow_int4: bool = True) -> list[str]:
+    """The servers a deployment could choose from: no repeats, no controls."""
+    allowed = set(DEPLOYABLE) - (set() if allow_int4 else {"a"})
+    return [
+        label
+        for label in labels_run(m8, model)
+        if not label.endswith("-r2") and set(letters(label)) <= allowed
+    ]
+
+
+def best(m8: Records, model: str, workload: str, allow_int4: bool = True) -> tuple[str, float] | None:
+    """(label, tokens/s) of the fastest measured candidate on one workload."""
+    rates = {label: tok_s(m8, model, label, workload) for label in candidates(m8, model, allow_int4)}
+    rates = {label: rate for label, rate in rates.items() if rate}
+    if not rates:
+        return None
+    label = max(rates, key=rates.get)
+    return label, rates[label]
+
+
+def best_table(m8: Records, model: str, perplexity: dict[str, float] | None = None) -> str:
+    """Per workload: the full stack against the best measured stack, with and without INT4 weights.
+
+    `perplexity` (lossy letters → vLLM's WikiText-2 perplexity) adds what the best FP8-class stack costs in
+    quality: speed is never reported without it.
+    """
+    rows = []
+    for workload in WORKLOADS:
+        base = tok_s(m8, model, BASE, workload)
+        if not base:
+            continue
+        fp8, int4 = best(m8, model, workload, allow_int4=False), best(m8, model, workload)
+        lossy = "".join(x for x in letters(fp8[0]) if x in "wk") if fp8 else ""
+        change = None
+        if perplexity and lossy in perplexity and "" in perplexity:
+            change = 100 * (perplexity[lossy] / perplexity[""] - 1)
+        rows.append(
+            [
+                WORKLOAD_LABELS[workload],
+                _f(base, 0),
+                _f(speedup(m8, model, FULL, workload), 2, "×"),
+                f"`{fp8[0]}`" if fp8 else DASH,
+                _f(fp8[1] / base, 2, "×") if fp8 else DASH,
+                f"{change:+.1f}%" if change is not None else DASH,
+                f"`{int4[0]}`" if int4 and "a" in letters(int4[0]) else DASH,
+                _f(int4[1] / base, 2, "×") if int4 and "a" in letters(int4[0]) else DASH,
+            ]
+        )
+    headers = [
+        "Workload",
+        "Stock BF16 (tokens/s)",
+        "Full stack `wkps`",
+        "Best measured stack",
+        "Its speedup",
+        "Its perplexity vs BF16",
+        "Best with INT4 weights, if faster",
+        "Its speedup",
+    ]
+    return markdown_table(headers, rows)
+
+
+def graphs_of(m8: Records, model: str, label: str) -> dict[str, Any] | None:
+    """What vLLM said at this server's startup about CUDA graphs (the newest record that has it)."""
+    found = None
+    for experiment in ("m8_graphs", "server_start"):
+        for m in _sorted(m8, experiment):
+            if (m["model"], m["label"]) == (model, label) and m.get("cuda_graphs"):
+                found = m
+    return found
+
+
+def graph_mode(start: dict[str, Any] | None) -> str:
+    """ "full" if a full graph of the decode pass was captured, else "piecewise"."""
+    if not start:
+        return DASH
+    return "full" if "full" in start["cuda_graphs"]["captured"] else "piecewise"
+
+
+def pass_ms(m8: Records, model: str, label: str, workload: str = "m8_latency") -> float | None:
+    """Milliseconds per target pass: time per token × tokens kept per pass (1 without speculation)."""
+    m = serving(m8, model, label, workload)
+    if not m:
+        return None
+    kept = tokens_per_pass(m) if "s" in letters(label) else 1.0
+    return m["summary"]["tpot_ms"]["p50"] * kept if kept else None
+
+
+def collision_table(m8: Records, model: str, labels: list[str] | None = None) -> str:
+    """The servers that separate the causes of the FP8-KV and speculation collision, at one user."""
+    names = {
+        BASE: "stock",
+        "g": "stock, piecewise graphs only (control)",
+        "k": "FP8 KV",
+        "s": "speculation",
+        "sg": "speculation, piecewise graphs only (control)",
+        "fs": "speculation on FlashInfer, BF16 cache (control)",
+        "ks": "speculation + FP8 KV",
+    }
+    rows = []
+    for label in labels or list(names):
+        m = serving(m8, model, label, "m8_latency")
+        if not m:
+            continue
+        start = graphs_of(m8, model, label)
+        rows.append(
+            [
+                f"`{label}`",
+                names.get(label, label),
+                (start or {}).get("attention_backend") or DASH,
+                graph_mode(start),
+                _f(tok_s(m8, model, label, "m8_latency"), 0),
+                _f(tokens_per_pass(m) if "s" in letters(label) else 1.0, 2),
+                _f(pass_ms(m8, model, label), 1),
+                _f(power(m8, model, label, "m8_latency"), 0),
+                _f(tok_s(m8, model, label, "spec_mixed"), 0),
+            ]
+        )
+    headers = [
+        "Server",
+        "What it is",
+        "Attention backend",
+        "Decode pass in a CUDA graph",
+        "Tokens/s, 1 user",
+        "Tokens per pass",
+        "ms per pass",
+        "GPU power (W)",
+        "Tokens/s, 64 users",
+    ]
+    return markdown_table(headers, rows)
+
+
+def fallback_message(m8: Records, model: str, label: str) -> str | None:
+    """vLLM's own words when it gave up the full graph on this server."""
+    start = graphs_of(m8, model, label)
+    return start["cuda_graphs"].get("fallback") if start else None
+
+
+def control_observables(m8: Records) -> dict[str, float | None]:
+    """The measured value of every quantity in benchmarks/predictions/m8_controls.json."""
+
+    def ratio(label: str, over: str, workload: str) -> float | None:
+        return speedup(m8, LARGE, label, workload, over)
+
+    return {
+        "control_fs_vs_ks_latency": ratio("fs", "ks", "m8_latency"),
+        "control_fs_latency": ratio("fs", "s", "m8_latency"),
+        "control_sg_latency": ratio("sg", "s", "m8_latency"),
+        "control_g_latency": ratio("g", BASE, "m8_latency"),
+        "control_g_busy": ratio("g", BASE, "spec_mixed"),
+        "control_fs_busy": ratio("fs", "s", "spec_mixed"),
+        "control_aps_latency": ratio("aps", BASE, "m8_latency"),
+        "control_aps_multi_turn": ratio("aps", BASE, "multi_turn"),
+    }
 
 
 # ---- predictions -------------------------------------------------------------------------------------------
