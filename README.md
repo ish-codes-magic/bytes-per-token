@@ -307,7 +307,8 @@ Inside the from-scratch engine, every GPU kernel of one decode step, before and 
 <!-- END GENERATED: caption-m7_timeline -->
 
 The kernels are not integrated into vLLM. What their timings imply for it, with the method checked against a
-step vLLM really ran (first row):
+step vLLM really ran (first row; the second row is the same check with the biased cache-eviction method
+this milestone found and replaced):
 
 <!-- BEGIN GENERATED: m7_projection -->
 *Short-context step: 5.8 ms; 28 layers.*
