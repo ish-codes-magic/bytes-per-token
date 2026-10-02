@@ -1,5 +1,8 @@
 # Gate Report: M6, speculative decoding
 
+> **Gate decision (2026-10-02):** approved by the owner (explain-it-back questions deferred for later study).
+> Tagged `v0.6-speculative`.
+
 ## What was built
 
 - **The speculative sampler** ([`spec/rejection_sampler.py`](../../src/fastserve/spec/rejection_sampler.py)),
