@@ -1064,6 +1064,82 @@ def quality_table(m8: Records, m5: Records, m4: Records, m2_quality: Records) ->
     return markdown_table(headers, rows)
 
 
+def perplexities(m8: Records, m5: Records, m4: Records, model: str) -> dict[str, float]:
+    """vLLM's WikiText-2 perplexity per lossy part of a stack: "" (BF16), "w", "k", "wk", "a" (INT4)."""
+
+    def last(records: Records, experiment: str, **match: Any) -> float | None:
+        found = [m for m in _sorted(records, experiment) if all(m.get(k) == v for k, v in match.items())]
+        return found[-1].get("perplexity") if found else None
+
+    values = {
+        "": last(m4, "m4_vllm_perplexity", model=model, format="bf16"),
+        "w": last(m4, "m4_vllm_perplexity", model=model, format="fp8"),
+        "a": last(m4, "m4_vllm_perplexity", model=model, format="awq"),
+        "k": last(m5, "m5_vllm_perplexity", model=model),
+        "wk": last(m8, "m8_perplexity", model=model),
+    }
+    return {name: value for name, value in values.items() if value is not None}
+
+
+def kernel_projection(
+    m8: Records, m7: Records, configs: dict[str, Any], model: str
+) -> dict[str, float] | None:
+    """What M7's kernel 2 would give vLLM on the long workload, from measured pieces. A projection.
+
+    The `wk` server's step at 32k tokens minus its step at short context is the time FlashInfer spends
+    reading the FP8 cache. Replace that with kernel 2's measured time on INT4 codes, once per layer:
+
+        projected step = wk's short-context step + layers × kernel 2's layer time at 32,768 tokens
+
+    Neither the kernel nor an INT4 cache exists in vLLM, and the kernel verifies one token per sequence, so
+    this is for the stack without speculation.
+    """
+    from fastserve.report.m7 import att
+
+    long, short = serving(m8, model, "wk", "long_32k"), serving(m8, model, "wk", "m8_latency")
+    layer_ms = att(m7, 1, 32768, "triton-int4")
+    if not long or not short or layer_ms is None:
+        return None
+    step = long["summary"]["tpot_ms"]["p50"]
+    projected = short["summary"]["tpot_ms"]["p50"] + configs[model].num_layers * layer_ms
+    ttft_s = long["summary"]["ttft_ms"]["p50"] / 1e3
+    output = measured_load(long, None).output_len
+    return {
+        "fp8_step_ms": step,
+        "fp8_attention_ms": step - short["summary"]["tpot_ms"]["p50"],
+        "kernel_attention_ms": configs[model].num_layers * layer_ms,
+        "step_ms": projected,
+        "tok_s": output / (ttft_s + output * projected / 1e3),
+        "measured_tok_s": long["summary"]["output_throughput"],
+    }
+
+
+def kernel_projection_table(m8: Records, m7: Records, configs: dict[str, Any]) -> str:
+    rows = []
+    for model in (SMALL, LARGE):
+        x = kernel_projection(m8, m7, configs, model)
+        if x:
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    _f(x["fp8_step_ms"], 1),
+                    _f(x["fp8_attention_ms"], 1),
+                    _f(x["kernel_attention_ms"], 1),
+                    _f(x["step_ms"], 1),
+                    _f(x["fp8_step_ms"] / x["step_ms"], 2, "×"),
+                ]
+            )
+    headers = [
+        "Model",
+        "Measured step, FP8 KV (ms)",
+        "of which the KV read (ms)",
+        "Kernel 2 on INT4 codes, all layers (ms)",
+        "Projected step (ms)",
+        "Projected gain",
+    ]
+    return markdown_table(headers, rows)
+
+
 def cost_table(m8: Records, dollars_per_hour: float) -> str:
     """The final cost table: $ per 1M output tokens, stock BF16 against the full stack, per workload."""
     rows = []
@@ -1092,3 +1168,74 @@ def cost_table(m8: Records, dollars_per_hour: float) -> str:
         "Full stack with INT4 weights ($ per 1M)",
     ]
     return markdown_table(headers, rows)
+
+
+# ---- predictions -------------------------------------------------------------------------------------------
+
+
+def m8_observables(
+    m8: Records, frozen_file: dict[str, Any], m4: Records, m2_quality: Records
+) -> dict[str, float | None]:
+    """The measured value of every quantity in benchmarks/predictions/m8.json."""
+    from fastserve.report import m4 as m4_report
+
+    def sp(label: str, workload: str, model: str = LARGE, over: str = BASE) -> float | None:
+        return speedup(m8, model, label, workload, over)
+
+    def ratio(a: float | None, b: float | None) -> float | None:
+        return a / b if a and b else None
+
+    def gain_share() -> float | None:
+        w, wf, wk = (sp(label, "capacity") for label in ("w", "wf", "wk"))
+        return (wf - w) / (wk - w) if w and wf and wk and wk != w else None
+
+    errors = prediction_errors(m8, frozen_file)
+    plain = [r["error"] for r in errors if "s" not in letters(r["label"])]
+    repeats = [abs(diff) for model in (LARGE, SMALL) for _, _, diff in repeat_differences(m8, model)]
+    kept = serving(m8, LARGE, "s", "capacity")
+
+    def one(experiment: str, model: str) -> dict[str, Any]:
+        found = [m for m in _sorted(m8, experiment) if m["model"] == model]
+        return found[-1] if found else {}
+
+    base_ppl = [m for m in _sorted(m4, "m4_vllm_perplexity") if (m["model"], m["format"]) == (LARGE, "bf16")]
+    gsm8k = (one("m8_tasks", LARGE).get("scores", {}).get("gsm8k") or {}).get("score")
+    base_gsm8k = m4_report.tasks(m4, m2_quality, LARGE, "bf16").get("gsm8k")
+    return {
+        "full_latency": sp(FULL, "m8_latency"),
+        "full_busy": sp(FULL, "spec_mixed"),
+        "full_capacity": sp(FULL, "capacity"),
+        "full_multi_turn": sp(FULL, "multi_turn"),
+        "full_long": sp(FULL, "long_32k"),
+        "int4_latency": sp("akps", "m8_latency", over=FULL),
+        "int4_busy": sp("akps", "spec_mixed", over=FULL),
+        "interaction_ws_latency": interaction(m8, LARGE, "w", "s", "m8_latency"),
+        "interaction_wk_busy": interaction(m8, LARGE, "w", "k", "spec_mixed"),
+        "interaction_ks_capacity": interaction(m8, LARGE, "k", "s", "capacity"),
+        "interaction_ps_multi_turn": interaction(m8, LARGE, "p", "s", "multi_turn"),
+        "interaction_wp_multi_turn": interaction(m8, LARGE, "w", "p", "multi_turn"),
+        "interaction_kp_multi_turn": interaction(m8, LARGE, "k", "p", "multi_turn"),
+        "loo_s_latency": sp(FULL, "m8_latency", over=without(FULL, "s")),
+        "loo_w_latency": sp(FULL, "m8_latency", over=without(FULL, "w")),
+        "loo_k_capacity": sp(FULL, "capacity", over=without(FULL, "k")),
+        "loo_p_multi_turn": sp(FULL, "multi_turn", over=without(FULL, "p")),
+        "prefix_without_prefixes": sp("wp", "m8_latency", over="w"),
+        "flashinfer_share_capacity": gain_share(),
+        "eagle_kept_capacity": tokens_per_pass(kept) if kept else None,
+        "model_median_error": _median_abs([r["error"] for r in errors]),
+        "model_within_15": sum(abs(r["error"]) <= 0.15 for r in errors) / len(errors) if errors else None,
+        "model_median_error_plain": _median_abs(plain),
+        "repeat_difference": max(repeats) if repeats else None,
+        "energy_full_latency": ratio(
+            tokens_per_joule(m8, LARGE, FULL, "m8_latency"), tokens_per_joule(m8, LARGE, BASE, "m8_latency")
+        ),
+        "power_busy_base": power(m8, LARGE, BASE, "spec_mixed"),
+        "small_full_latency": sp(FULL, "m8_latency", SMALL),
+        "small_full_busy": sp(FULL, "spec_mixed", SMALL),
+        "small_full_multi_turn": sp(FULL, "multi_turn", SMALL),
+        "quality_perplexity": ratio(
+            one("m8_perplexity", LARGE).get("perplexity"), base_ppl[-1]["perplexity"] if base_ppl else None
+        ),
+        "quality_needle": one("m8_needle", LARGE).get("pass_rate"),
+        "quality_gsm8k": gsm8k - base_gsm8k / 100 if gsm8k is not None and base_gsm8k is not None else None,
+    }

@@ -987,3 +987,98 @@ def m7_records() -> list[dict[str, Any]]:
     needle = {"model": "Qwen/Qwen3-0.6B", "cache": "int4-kernel", "cells": cells, "pass_rate": 1.0}
     add("m7_needle", needle, "quality")
     return records
+
+
+@pytest.fixture
+def m8_records() -> list[dict[str, Any]]:
+    """A hand-made M8 campaign on Qwen3-1.7B: gains multiply, except FP8 weights × speculation (0.9)."""
+    from fastserve.serving.ablation import factorial, letters
+
+    records = []
+    model = "Qwen/Qwen3-1.7B"
+
+    def add(experiment, metrics):
+        record = make_record(
+            experiment, metrics, run_id="m8test", env={}, git={"commit": "0" * 16}, config={}
+        )
+        record["timestamp"] = "2026-10-03T00:00:00+00:00"
+        records.append(record)
+
+    base = {
+        "m8_latency": 100.0,
+        "spec_mixed": 2000.0,
+        "capacity": 250.0,
+        "multi_turn": 200.0,
+        "long_32k": 10.0,
+    }
+    users = {"m8_latency": 1, "spec_mixed": 64, "capacity": 96, "multi_turn": 8, "long_32k": 1}
+    gain = {  # per technique: its speedup on each workload (None = every other workload)
+        "w": {"m8_latency": 1.5, None: 1.25},
+        "k": {"m8_latency": 1.0, "spec_mixed": 1.2, "capacity": 1.6, "multi_turn": 1.1, "long_32k": 1.2},
+        "p": {"multi_turn": 2.0, None: 1.0},
+        "s": {"m8_latency": 1.6, None: 1.2},
+        "f": {"capacity": 1.1, None: 1.0},
+        "a": {"m8_latency": 2.0, None: 1.2},
+    }
+
+    def rate(label: str, workload: str) -> float:
+        on = letters(label)
+        tok_s = base[workload]
+        for letter in on:
+            tok_s *= gain[letter].get(workload, gain[letter].get(None, 1.0))
+        if "w" in on and "s" in on:
+            tok_s *= 0.9  # the one pair that competes
+        return tok_s * {"base-r2": 1.02, "wkps-r2": 0.97}.get(label, 1.0)
+
+    ladder = ("base", "w", "wf", "wk", "wkp", "wkps", "akps")
+    columns = [
+        "id",
+        "prompt_len",
+        "output_tokens",
+        "scheduled",
+        "sent",
+        "first_token",
+        "finished",
+        "cached_tokens",
+    ]
+    for label in [*factorial(["w", "k", "p", "s"]), "wf", "a", "akps", "base-r2", "wkps-r2"]:
+        on = letters(label)
+        start = {"label": label, "model": model, "kv_cache_tokens": 300_000 if "k" in on else 150_000}
+        add(
+            "server_start",
+            {**start, "attention_backend": "FLASHINFER" if set(on) & {"k", "f"} else "FLASH_ATTN"},
+        )
+        for workload, tok_s in base.items():
+            if workload == "long_32k" and label not in ladder:
+                continue
+            tok_s = rate(label, workload)
+            rows = [[i, 100, 50, 0.0, float(i), i + 0.05, i + 1.0, 0] for i in range(4)]
+            accepted = 500.0 if "s" in on else 0.0  # of 1,000 generated: two tokens per pass
+            timeline = {
+                "columns": ["t", "running", "generation_tokens", "spec_accepted"],
+                "rows": [[0.0, users[workload], 0.0, 0.0], [10.0, users[workload], 1000.0, accepted]],
+                "power": {"mean_w": 70.0, "max_w": 72.0, "n_samples": 100, "seconds": 10.0},
+            }
+            add(
+                "serving",
+                {
+                    "server": label,
+                    "model": model,
+                    "workload": workload,
+                    "load": {"mode": "closed", "concurrency": users[workload]},
+                    "summary": {
+                        "output_throughput": tok_s,
+                        "tpot_ms": {"p50": 1e3 * users[workload] / tok_s},
+                        "ttft_ms": {"p50": 50.0},
+                        "duration_s": 10.0,
+                    },
+                    "requests": {"columns": columns, "rows": rows},
+                    "server_timeline": timeline,
+                },
+            )
+    add("m8_failure", {"name": "0.6b-wks", "error": "RuntimeError: vLLM exited during startup"})
+    add("m8_perplexity", {"model": model, "label": "wk", "perplexity": 20.4, "positions": 1000})
+    add("m8_needle", {"model": model, "label": "wk", "pass_rate": 1.0, "cells": []})
+    scores = {"gsm8k": {"score": 0.5}, "mmlu": {"score": 0.6}, "humaneval": {"score": 0.3}}
+    add("m8_tasks", {"model": model, "label": "wk", "scores": scores})
+    return records
