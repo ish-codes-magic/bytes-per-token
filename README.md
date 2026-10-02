@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 Milestone 7 (custom Triton kernels) is built and at its gate review. Results appear below as each milestone lands.
+> **Status:** 🚧 In progress: Milestone 8 (full-stack ablation and performance model). Results appear below as each milestone lands.
 
 ---
 
@@ -392,8 +392,8 @@ Two sizes from one family show **how each gain changes with model size**.
 | M4 | Quantization in production: format crossover vs batch size | ✅ Done |
 | M5 | KV-cache quantization and prefix caching | ✅ Done |
 | M6 | Speculative decoding, proven lossless | ✅ Done |
-| M7 | Custom Triton kernels: fused norm + INT8, attention over a 4-bit KV cache | 🚧 At gate review |
-| M8 | Full-stack ablation across model sizes, performance model | ⏳ |
+| M7 | Custom Triton kernels: fused norm + INT8, attention over a 4-bit KV cache | ✅ Done |
+| M8 | Full-stack ablation across model sizes, performance model | 🚧 In progress |
 | M9 | Dashboard, write-up, one-command reproduction | ⏳ |
 
 ---
