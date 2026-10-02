@@ -253,6 +253,9 @@ overhead. The overhead is fitted once per model, on BF16, and reused unchanged f
   per-token scales, that op must read the whole activation to find each token's maximum, before the matmul
   starts. It's a small fixed cost per linear layer, repeated in every layer.
   M7's first kernel fuses exactly this step into the RMSNorm before it.
+  **Correction from M7:** with the op's cost measured inside a CUDA graph, these launches account for under
+  half of the gap (the table in [04-kernels.md](../04-kernels.md), section 1). The op is real; it is not
+  the whole explanation, and the rest is open.
 
 ![Roofline](../../results/figures/m4_roofline.png)
 <!-- BEGIN GENERATED: caption-m4_roofline -->
@@ -444,7 +447,7 @@ depends on the traffic, so every waterfall in this project shows both regimes.
 | Observation | Explanation (lever) |
 |---|---|
 | Batch-1 speedups are well below the ratio of bits | The BF16 LM head and a fixed per-step overhead don't shrink. *Move fewer bytes* only applies to the bytes that got smaller. |
-| W8A8 is slower than its bytes predict; INT4 isn't | W8A8 quantizes every linear input in a separate op. *Less waste*, in reverse: an extra pass per layer. |
+| W8A8 is slower than its bytes predict; INT4 isn't | W8A8 quantizes every linear input in a separate op. *Less waste*, in reverse: an extra pass per layer. (M7 measured it: under half of the gap. The rest is open.) |
 | INT4's lead fades gradually and flips later than B* | B* is where INT4's matmuls turn compute-bound. The linear layers alone cross near batch 109, and the KV reads and attention (the same in every format) pull the ratio toward 1. |
 | FP8 on Qwen3-0.6B is no faster than BF16 at batch 64 | Its matrices are small (hidden size 1024), so fixed per-kernel costs, including W8A8's extra op, are a larger share. It's the same effect as the row above, amplified. To be confirmed with a profile in M7. |
 | Saturated throughput barely changes | At saturation the KV cache dominates each step's bytes (M2). Weight quantization can't touch it. M5 attacks the KV cache directly. |

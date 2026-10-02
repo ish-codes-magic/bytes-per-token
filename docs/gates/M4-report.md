@@ -132,7 +132,8 @@ Batch-1 TPOT from bytes alone, with the fixed overhead fitted on BF16:
 
 - **W8A8 is slower than its bytes predict, INT4 isn't.** vLLM quantizes each linear layer's input in a separate
   op before the 8-bit matmul (read from the installed source). That's an extra pass per layer, and the target
-  of M7's first kernel.
+  of M7's first kernel. *(Added after M7: measured in a CUDA graph, those launches cover under half of the
+  gap. See [04-kernels.md](../04-kernels.md), section 1.)*
 - **My own crossover math was loose.** Section 2 of the learning doc treated B* ≈ 56 (where INT4's matmuls turn
   compute-bound) as the crossover. For the linear layers alone, INT4 stays ahead until batch ≈ 109, where its
   16-bit math time equals FP8's streaming time. The measured flip is between batch 64 and 256.
