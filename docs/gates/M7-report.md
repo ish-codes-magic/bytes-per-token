@@ -18,7 +18,7 @@
 - **Both inside nanoserve** ([`integration/`](../../src/fastserve/integration/)): `QuantizedKVCache` stores
   codes, keeps an incomplete key group in a full-precision tail, and merges kernel and tail on decode
   steps. `NormQuantInt8` puts kernel 1 behind every pre-norm.
-- **Tests:** 22 CPU tests of the references and the cache's bookkeeping, 44 GPU tests of the kernels over
+- **Tests:** 26 CPU tests of the references and the cache's bookkeeping, 44 GPU tests of the kernels over
   odd widths and lengths, empty rows, one and two query heads per KV head, three dtypes and 32,768 tokens.
 - **The campaign** ([config](../../benchmarks/configs/m7_kernels.yaml), `make bench-kernels`): profile,
   kernel 1 against vLLM's ops (eagerly and in a CUDA graph), kernel 2's tuning sweep, kernel 2 against
