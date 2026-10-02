@@ -366,6 +366,7 @@ def decode_stepper(model: CausalLM, cache: KVCache, tokens: torch.Tensor, positi
     state = {"tokens": tokens, "position": torch.full((b, 1), position, device=tokens.device)}
     zeros = torch.zeros(b, dtype=torch.long, device=tokens.device)
 
+    @torch.inference_mode()  # on the function itself: it is also called after its maker has returned
     def step() -> None:
         state["tokens"] = model(state["tokens"], state["position"], cache, select=zeros).argmax(
             -1, keepdim=True
