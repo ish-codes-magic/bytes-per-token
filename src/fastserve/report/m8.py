@@ -1316,12 +1316,164 @@ def fallback_message(m8: Records, model: str, label: str) -> str | None:
     return start["cuda_graphs"].get("fallback") if start else None
 
 
+def step_ms(m8: Records, model: str, label: str, workload: str = "m8_latency") -> float | None:
+    """Milliseconds per engine step, from vLLM's own step counter over the load's duration."""
+    m = serving(m8, model, label, workload)
+    if not m:
+        return None
+    table = _columns(m["server_timeline"])
+    steps = [x for x in table.get("steps", []) if x is not None]
+    if len(steps) < 2 or steps[-1] <= steps[0]:
+        return None
+    return 1e3 * (table["t"][-1] - table["t"][0]) / (steps[-1] - steps[0])
+
+
+# A server on piecewise graphs → the closest servers that keep the full graph (the first that ran is used).
+FULL_GRAPH_TWINS = {
+    "g": ["base"],
+    "fg": ["f"],
+    "wg": ["w"],
+    "sg": ["s"],
+    "wsg": ["ws", "wps"],
+    "fs": ["s"],
+    "ks": ["s"],
+    "kps": ["ps"],
+    "wks": ["ws", "wps"],
+    "wkps": ["wps"],
+    "akps": ["aps"],
+}
+
+
+def host_chain_table(m8: Records) -> str:
+    """Every server that ran on piecewise graphs, at one user: its step time next to a full-graph twin's.
+
+    Where the piecewise server is slower, the difference is not GPU work (the two do the same): it is the
+    host, which in piecewise mode calls attention and launches a graph for every layer.
+    """
+    names = {"bf16": "BF16", "fp8": "FP8", "int4": "INT4"}
+    rows = []
+    for model in (SMALL, LARGE):
+        for label in labels_run(m8, model):
+            if label.endswith("-r2") or graph_mode(graphs_of(m8, model, label)) != "piecewise":
+                continue
+            on = letters(label)
+            twin = next((t for t in FULL_GRAPH_TWINS.get(label, []) if step_ms(m8, model, t)), None)
+            weights = "fp8" if "w" in on else "int4" if "a" in on else "bf16"
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    f"`{label}`",
+                    names[weights],
+                    "FlashInfer" if set(on) & {"k", "f"} else "FlashAttention",
+                    "yes" if "s" in on else "no",
+                    _f(step_ms(m8, model, label), 1),
+                    f"{_f(step_ms(m8, model, twin), 1)} (`{twin}`)" if twin else DASH,
+                    _f(power(m8, model, label, "m8_latency"), 0),
+                    _f(power(m8, model, twin, "m8_latency"), 0) if twin else DASH,
+                ]
+            )
+    headers = [
+        "Model",
+        "Server",
+        "Weights",
+        "Attention",
+        "Speculation",
+        "ms per step, piecewise graphs",
+        "ms per step, full graph (closest server)",
+        "GPU power (W)",
+        "GPU power, full graph (W)",
+    ]
+    return markdown_table(headers, rows)
+
+
+def plan_cost(
+    m8: Records, kind: str, batch: int = 1, context: int = 600, what: str = "host_ms"
+) -> float | None:
+    """Median ms of one of FlashInfer's calls, timed alone (experiments/m8.plan_cost)."""
+    found = None
+    for m in _sorted(m8, "m8_plan_cost"):
+        if (m["kind"], m["batch"], m["context"]) == (kind, batch, context) and what in m:
+            found = m[what]["p50"]
+    return found
+
+
+def plan_cost_table(m8: Records, context: int = 600) -> str:
+    """FlashInfer's calls as vLLM makes them: host time (until the call returns) and time to completion."""
+    kinds = ["graph decode plan", "eager decode plan", "prefill plan", "decode run", "prefill run"]
+    notes = {
+        "graph decode plan": "per pass, inside a full CUDA graph",
+        "eager decode plan": "per pass, one token per sequence, no full graph",
+        "prefill plan": "per pass with several tokens per sequence (a speculative pass)",
+        "decode run": "per layer, one token per sequence",
+        "prefill run": "per layer, four tokens per sequence",
+    }
+    batches = sorted({m["batch"] for m in _sorted(m8, "m8_plan_cost") if m["context"] == context})
+    rows = []
+    for kind in kinds:
+        cells = [kind, notes[kind]]
+        for batch in batches:
+            host, total = (plan_cost(m8, kind, batch, context, what) for what in ("host_ms", "total_ms"))
+            cells.append(f"{_f(host, 3)} · {_f(total, 3)}")
+        rows.append(cells)
+    headers = ["Call", "When vLLM makes it"] + [
+        f"{b} sequence{'s' if b > 1 else ''}: host · total (ms)" for b in batches
+    ]
+    return markdown_table(headers, rows)
+
+
+def profile_of(m8: Records, name: str) -> dict[str, Any] | None:
+    found = None
+    for m in _sorted(m8, "m8_profile"):
+        if m["name"] == name:
+            found = m
+    return found
+
+
+def profile_calls(profile: dict[str, Any], name: str) -> int | None:
+    """How often a host call appears in a profile's table (None if it is not among the rows kept)."""
+    return next((row["calls"] for row in profile["host"] if row["name"] == name), None)
+
+
+def profile_table(m8: Records, names: list[str]) -> str:
+    """Profiled servers side by side, per engine step: the same GPU work, very different wall time."""
+    rows = []
+    for name in names:
+        profile = profile_of(m8, name)
+        if not profile:
+            continue
+        steps = profile["iterations"]
+        graphs = profile_calls(profile, "cudaGraphLaunch")
+        kernels = profile_calls(profile, "cudaLaunchKernel")
+        rows.append(
+            [
+                f"`{profile['label']}`",
+                graph_mode(graphs_of(m8, profile["model"], profile["label"])),
+                _f(profile["span_ms"] / steps, 1),
+                _f(profile["gpu_ms"] / steps, 1),
+                _f(100 * profile["gpu_ms"] / profile["span_ms"], 0, "%"),
+                _f(graphs / steps if graphs else None, 0),
+                _f(kernels / steps if kernels else None, 0),
+            ]
+        )
+    headers = [
+        "Server",
+        "CUDA graphs",
+        "Wall time per step, profiled (ms)",
+        "GPU kernel time per step (ms)",
+        "GPU busy",
+        "Graph launches per step",
+        "Kernel launches per step, outside graphs",
+    ]
+    return markdown_table(headers, rows)
+
+
 def control_observables(m8: Records) -> dict[str, float | None]:
-    """The measured value of every quantity in benchmarks/predictions/m8_controls.json."""
+    """The measured value of every quantity in benchmarks/predictions/m8_controls*.json and m8_plan.json."""
 
-    def ratio(label: str, over: str, workload: str) -> float | None:
-        return speedup(m8, LARGE, label, workload, over)
+    def ratio(label: str, over: str, workload: str, model: str = LARGE) -> float | None:
+        return speedup(m8, model, label, workload, over)
 
+    plan, run = plan_cost(m8, "prefill plan"), plan_cost(m8, "prefill run")
     return {
         "control_fs_vs_ks_latency": ratio("fs", "ks", "m8_latency"),
         "control_fs_latency": ratio("fs", "s", "m8_latency"),
@@ -1331,6 +1483,24 @@ def control_observables(m8: Records) -> dict[str, float | None]:
         "control_fs_busy": ratio("fs", "s", "spec_mixed"),
         "control_aps_latency": ratio("aps", BASE, "m8_latency"),
         "control_aps_multi_turn": ratio("aps", BASE, "multi_turn"),
+        # second round
+        "control_fg_latency": ratio("fg", "f", "m8_latency"),
+        "control_f_latency": ratio("f", BASE, "m8_latency"),
+        "control_f_busy": ratio("f", BASE, "spec_mixed"),
+        "control_fg_busy": ratio("fg", "f", "spec_mixed"),
+        # FlashInfer's calls, timed alone
+        "plan_prefill_host_ms": plan,
+        "run_prefill_host_ms": run,
+        "pass_host_ms": 28 * run + 4 * plan if plan is not None and run is not None else None,
+        "plan_graph_host_ms": plan_cost(m8, "graph decode plan"),
+        "run_decode_host_ms": plan_cost(m8, "decode run"),
+        # third round: the small model, where the GPU's pass is short
+        "control_wsg_latency": ratio("wsg", "wps", "m8_latency", SMALL),
+        "control_wg_latency": ratio("wg", "w", "m8_latency", SMALL),
+        "control_wsg_pass_ms": pass_ms(m8, SMALL, "wsg"),
+        # fourth round: the weights swapped
+        "control_small_g_step_ms": step_ms(m8, SMALL, "g"),
+        "control_large_wg_step_ms": step_ms(m8, LARGE, "wg"),
     }
 
 
