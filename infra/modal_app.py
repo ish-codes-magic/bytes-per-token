@@ -395,6 +395,93 @@ def m8_plan_cost(config_path: str, run_id: str, git: dict) -> list[dict]:
     return to_plain(run_plan_cost(config, REMOTE, run_id=run_id, git=git, config_path=config_path))
 
 
+@app.function(image=serving_image, gpu=GPU, cpu=8, memory=32768, timeout=40 * 60, volumes={CACHE: hf_cache})
+def m8_profile(name: str, config_path: str, run_id: str, git: dict, with_stack: bool = True) -> list[dict]:
+    """One M8 server under vLLM's own PyTorch profiler for a few engine steps of a one-user request.
+
+    Returns where the host thread's time went (self time per op and Python function) and which GPU kernels
+    ran. Profiling with Python stacks slows the host, so read the shares, not the milliseconds.
+    """
+    import json as _json
+    import time
+    import urllib.request
+
+    hf_cache.reload()
+
+    from fastserve.engine.loader import checkpoint_dir, model_dir
+    from fastserve.experiments.m2 import _speculative_args, _warm_up
+    from fastserve.experiments.m8 import summarize_trace
+    from fastserve.results import environment_info, make_record, to_plain
+    from fastserve.serving.server import VLLMServer
+
+    config = _m8_config(config_path)
+    entry = next(s for s in config["servers"] if s["name"] == name)
+    spec = config["profile"]
+    model = entry["model"]
+    path = checkpoint_dir(entry["path"]) if entry.get("path") else model_dir(model)
+    trace_dir = Path("/tmp/vllm_profile")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    profiler = {
+        "profiler": "torch",
+        "torch_profiler_dir": str(trace_dir),
+        "torch_profiler_with_stack": with_stack,
+        "torch_profiler_use_gzip": False,
+        "torch_profiler_dump_cuda_time_total": False,
+        "ignore_frontend": True,
+        "delay_iterations": spec["delay_iterations"],
+        "max_iterations": spec["iterations"],
+    }
+    args = [*entry["args"], *_speculative_args(entry.get("speculative"))]
+    args += ["--profiler-config", _json.dumps(profiler)]
+
+    def post(route: str, payload: dict | None = None, timeout: float = 600) -> bytes:
+        request = urllib.request.Request(
+            f"{server.url}{route}",
+            data=_json.dumps(payload or {}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+
+    messages = [{"role": "user", "content": spec["prompt"]}]
+    chat = {"model": model, "messages": messages, "max_tokens": spec["max_tokens"], "temperature": 0}
+    with VLLMServer(path, served_name=model, extra_args=args) as server:
+        _warm_up(server, model)
+        post("/v1/chat/completions", chat)  # the same request once, unprofiled
+        post("/start_profile")
+        body = _json.loads(post("/v1/chat/completions", chat))
+        try:
+            post("/stop_profile")
+        except Exception as err:  # it stops itself after `iterations` steps; a second stop may be refused
+            print(f"stop_profile: {type(err).__name__}: {err}")
+        deadline = time.monotonic() + 180
+        while not (traces := sorted(trace_dir.rglob("*.json"), key=lambda p: p.stat().st_size)):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"no trace in {trace_dir}: {[p.name for p in trace_dir.rglob('*')]}")
+            time.sleep(2)
+        time.sleep(5)  # let the writer finish the file
+        events = _json.loads(traces[-1].read_text())["traceEvents"]
+    metrics = {
+        "name": name,
+        "label": entry["label"],
+        "model": model,
+        "with_stack": with_stack,
+        "iterations": spec["iterations"],
+        "completion_tokens": body["usage"]["completion_tokens"],
+        "events": len(events),
+        **summarize_trace(events, top=spec["top"]),
+    }
+    record = make_record(
+        "m8_profile",
+        metrics,
+        run_id=run_id,
+        config={"path": config_path, "profile": spec},
+        git=git,
+        env=environment_info(),
+    )
+    return to_plain([record])
+
+
 def _m7_task(task: str, config_path: str, run_id: str, git: dict) -> list[dict]:
     import yaml
 
@@ -736,6 +823,18 @@ def serving_library_facts(topic: str = "lm_eval") -> str:
         package, _, relative = topic.removeprefix("source:").partition("/")
         root = Path(importlib.import_module(package).__file__).parent
         return f"# {package}: {relative}\n" + (root / relative).read_text(encoding="utf-8")
+    if topic.startswith("grep:"):  # grep:<package>:<regex> — matching lines across an installed package
+        import importlib
+
+        package, _, pattern = topic.removeprefix("grep:").partition(":")
+        root = Path(importlib.import_module(package).__file__).parent
+        hits = []
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for number, line in enumerate(text.splitlines(), start=1):
+                if re.search(pattern, line):
+                    hits.append(f"{path.relative_to(root)}:{number}: {line.strip()[:200]}")
+        return "\n".join(hits[:400])
     if topic == "cudagraph":  # M8: which attention backends vLLM can capture in a full CUDA graph, and when
         import vllm
 
@@ -1512,6 +1611,8 @@ def m8(
     quality: str = "",
     graphs: bool = False,
     plan: bool = False,
+    profile: bool = False,
+    stack: bool = True,
 ) -> None:
     """M8: every server of the ablation plan, one container each, results appended as they finish.
 
@@ -1519,7 +1620,8 @@ def m8(
     start and answer one request (nothing is timed or recorded). `--quality perplexity,needle,tasks` runs
     the quality tasks for FP8 weights + FP8 KV instead of the servers. `--graphs` starts the picked servers
     only to record which CUDA graphs vLLM captured (the servers that ran before this was logged). `--plan`
-    times FlashInfer's plan and attention calls instead of running servers.
+    times FlashInfer's plan and attention calls instead of running servers. `--profile` runs the picked
+    servers under vLLM's PyTorch profiler for a few engine steps (`--no-stack` leaves Python stacks out).
     """
     from fastserve.results import append_jsonl, git_info, make_record, new_run_id
 
@@ -1533,6 +1635,29 @@ def m8(
             print(json.dumps(result, indent=2)[:3000], flush=True)
         return
     out = REPO / "results" / "raw" / "m8_ablation.jsonl"
+    if profile:
+        run_id = new_run_id()
+        calls = [(name, m8_profile.spawn(name, config, run_id, git, stack)) for name in names]
+        for name, call in calls:
+            try:
+                records = call.get()
+            except Exception as err:
+                print(f"{name} FAILED: {type(err).__name__}: {str(err)[:600]}", flush=True)
+                continue
+            m = records[0]["metrics"]
+            print(
+                f"{name}: {m['iterations']} steps, host self {m['host_self_ms']:.0f} ms, "
+                f"GPU {m['gpu_ms']:.0f} ms, span {m['span_ms']:.0f} ms",
+                flush=True,
+            )
+            for row in m["host"][:25]:
+                print(
+                    f"    {row['self_ms']:8.1f} ms self {row['total_ms']:8.1f} total {row['calls']:6d}x  "
+                    f"[{row['cat']}] {row['name'][:110]}",
+                    flush=True,
+                )
+            print(f"wrote {append_jsonl(out, records)} records to {out.relative_to(REPO)}", flush=True)
+        return
     if plan:
         records = m8_plan_cost.remote(config, new_run_id(), git)
         for record in records:

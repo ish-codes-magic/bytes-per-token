@@ -61,6 +61,15 @@ plan_cost:
   repeats: 200
   warmup: 20
 
+# ---- where a pass's host time goes: a server under vLLM's own PyTorch profiler ----------------------------
+# Added after plan_cost came back at 1.6 ms per pass: FlashInfer's own calls are not the 24 ms.
+profile:
+  prompt: "Write a Python function that checks whether a string is a palindrome, and explain it."
+  max_tokens: 160
+  delay_iterations: 8            # engine steps skipped after /start_profile (the prefill and first passes)
+  iterations: 24                 # engine steps profiled
+  top: 40                        # rows kept per table
+
 # ---- quality of the lossy part of the stack, in vLLM: FP8 weights + FP8 KV (label wk) --------------------
 # Prefix caching does not change outputs, and speculative decoding is lossless in distribution (M6).
 # Baselines: BF16 (M2's suite and needle grid, M4's perplexity), FP8 weights (M4), FP8 KV (M5).

@@ -197,3 +197,58 @@ def run_plan_cost(
                     )
                 )
     return records
+
+
+# ---- where a pass's host time goes: vLLM's own profiler ----------------------------------------------------
+
+
+def self_times(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Self time of every complete ("X") event in a Chrome trace: its duration minus its children's.
+
+    Events on one thread nest (an op inside a Python function inside a step). Sorting by start time, with
+    the longer event first on ties, lets a stack of open events find each event's parent. Returns the
+    events with `self_us` added; GPU kernels (which run on their own timeline) keep their full duration.
+    """
+    by_thread: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+    for event in events:
+        if event.get("ph") == "X" and "dur" in event:
+            by_thread.setdefault((event.get("pid"), event.get("tid")), []).append(event)
+    out = []
+    for thread in by_thread.values():
+        thread.sort(key=lambda e: (e["ts"], -e["dur"]))
+        open_events: list[dict[str, Any]] = []
+        for event in thread:
+            event = {**event, "self_us": float(event["dur"])}
+            while open_events and open_events[-1]["ts"] + open_events[-1]["dur"] <= event["ts"]:
+                open_events.pop()
+            if open_events:
+                open_events[-1]["self_us"] -= event["dur"]
+            open_events.append(event)
+            out.append(event)
+    return out
+
+
+def summarize_trace(events: list[dict[str, Any]], top: int = 30) -> dict[str, Any]:
+    """Per (category, name): calls, self time and total time, for host events and for GPU kernels."""
+    timed = self_times(events)
+    groups: dict[tuple[str, str], dict[str, float]] = {}
+    for event in timed:
+        key = (event.get("cat", ""), str(event.get("name", ""))[:140])
+        group = groups.setdefault(key, {"calls": 0, "self_ms": 0.0, "total_ms": 0.0})
+        group["calls"] += 1
+        group["self_ms"] += event["self_us"] / 1e3
+        group["total_ms"] += event["dur"] / 1e3
+    rows = [{"cat": cat, "name": name, **group} for (cat, name), group in groups.items()]
+    gpu = [r for r in rows if r["cat"] in ("kernel", "gpu_memcpy", "gpu_memset")]
+    host = [r for r in rows if r["cat"] not in ("kernel", "gpu_memcpy", "gpu_memset")]
+    spans = [(e["ts"], e["ts"] + e["dur"]) for e in timed]
+    return {
+        "span_ms": (max(end for _, end in spans) - min(start for start, _ in spans)) / 1e3 if spans else 0.0,
+        "host_self_ms": sum(r["self_ms"] for r in host),
+        "gpu_ms": sum(r["total_ms"] for r in gpu),
+        "host": sorted(host, key=lambda r: -r["self_ms"])[:top],
+        "gpu": sorted(gpu, key=lambda r: -r["total_ms"])[:top],
+        "annotations": sorted(
+            (r for r in rows if r["cat"] == "user_annotation"), key=lambda r: -r["total_ms"]
+        )[:top],
+    }
