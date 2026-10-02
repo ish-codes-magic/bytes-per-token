@@ -469,18 +469,28 @@ def m4_gsm8k(fmt: str, model: str, config_path: str, run_id: str, git: dict) -> 
 
 
 # Publishing needs a Hugging Face write token. The `publish` entrypoint attaches the Modal secret
-# `huggingface` (holding HF_TOKEN) at call time, so every other function runs without that secret existing.
-HF_SECRET = "huggingface"
+# `huggingface-secret` (the name Modal's Hugging Face template gives it) at call time, so every other
+# function runs without that secret existing.
+HF_SECRET = "huggingface-secret"
+HF_TOKEN_NAMES = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN")
+
+
+def _hf_token() -> str:
+    """The write token from whichever variable the secret defines. Never printed or returned to the laptop."""
+    import os
+
+    for name in HF_TOKEN_NAMES:
+        if os.environ.get(name):
+            return os.environ[name]
+    raise RuntimeError(f"the Modal secret {HF_SECRET!r} defines none of {HF_TOKEN_NAMES}")
 
 
 @app.function(cpu=1, memory=1024, timeout=5 * 60)
 def hf_owner() -> str:
     """The Hugging Face account the token belongs to: the namespace the checkpoints are published under."""
-    import os
-
     from huggingface_hub import HfApi
 
-    return HfApi(token=os.environ["HF_TOKEN"]).whoami()["name"]
+    return HfApi(token=_hf_token()).whoami()["name"]
 
 
 @app.function(cpu=2, memory=8192, timeout=60 * 60, volumes={CACHE: hf_cache})
@@ -491,7 +501,6 @@ def hf_upload(folder: str, repo: str, card: str) -> dict:
     blob hash for small ones. Only fully verified checkpoints may be deleted from the Volume.
     """
     import hashlib
-    import os
 
     from huggingface_hub import HfApi
 
@@ -508,7 +517,7 @@ def hf_upload(folder: str, repo: str, card: str) -> dict:
         return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
     hf_cache.reload()
-    api = HfApi(token=os.environ["HF_TOKEN"])
+    api = HfApi(token=_hf_token())
     api.create_repo(repo, repo_type="model", exist_ok=True)
     commit = api.upload_folder(folder_path=folder, repo_id=repo, commit_message="Upload checkpoint")
     api.upload_file(
