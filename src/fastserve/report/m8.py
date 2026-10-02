@@ -636,3 +636,459 @@ def predicted_speedups(frozen_file: dict[str, Any], model: str, labels: list[str
             cells.append(_f(r["tok_s"] / base["tok_s"], 2, "×") if r else DASH)
         rows.append(cells)
     return markdown_table(["Workload", "Base (tokens/s)"] + [f"`{label}`" for label in labels], rows)
+
+
+# ---- M8's own records: the ablation ------------------------------------------------------------------------
+
+LADDER = ["base", "w", "wk", "wkp", "wkps"]  # each step adds one technique
+FULL = "wkps"
+TECHNIQUES = {"w": "FP8 weights", "k": "FP8 KV cache", "p": "prefix caching", "s": "speculative decoding"}
+WORKLOADS = ["m8_latency", "spec_mixed", "capacity", "multi_turn", "long_32k"]
+
+
+def serving(m8: Records, model: str, label: str, workload: str) -> dict[str, Any] | None:
+    """The newest record of one server on one workload."""
+    found = None
+    for m in _sorted(m8, "serving"):
+        if (m["model"], m["server"], m["workload"]) == (model, label, workload):
+            found = m
+    return found
+
+
+def labels_run(m8: Records, model: str) -> list[str]:
+    return list(dict.fromkeys(m["server"] for m in _sorted(m8, "serving") if m["model"] == model))
+
+
+def tok_s(m8: Records, model: str, label: str, workload: str) -> float | None:
+    m = serving(m8, model, label, workload)
+    return m["summary"].get("output_throughput") if m else None
+
+
+def stat(m8: Records, model: str, label: str, workload: str, metric: str) -> float | None:
+    """p50 of tpot_ms or ttft_ms."""
+    m = serving(m8, model, label, workload)
+    return (m["summary"].get(metric) or {}).get("p50") if m else None
+
+
+def speedup(m8: Records, model: str, label: str, workload: str, over: str = BASE) -> float | None:
+    a, b = tok_s(m8, model, label, workload), tok_s(m8, model, over, workload)
+    return a / b if a and b else None
+
+
+def power(m8: Records, model: str, label: str, workload: str) -> float | None:
+    m = serving(m8, model, label, workload)
+    return ((m or {}).get("server_timeline", {}).get("power") or {}).get("mean_w")
+
+
+def tokens_per_joule(m8: Records, model: str, label: str, workload: str) -> float | None:
+    rate, watts = tok_s(m8, model, label, workload), power(m8, model, label, workload)
+    return rate / watts if rate and watts else None
+
+
+def dollars(rate: float | None, dollars_per_hour: float) -> float | None:
+    return dollars_per_hour / (rate * 3600) * 1e6 if rate else None
+
+
+def without(label: str, letter: str) -> str:
+    """The label with one technique switched off: wkps without k → wps; w without w → base."""
+    return label.replace(letter, "") or BASE
+
+
+def ladder_table(m8: Records, model: str, dollars_per_hour: float, labels: list[str] | None = None) -> str:
+    """Per workload: the base server's throughput and cost, each ladder step as a multiple of the base."""
+    labels = labels or LADDER
+    rows = []
+    for workload in WORKLOADS:
+        base = tok_s(m8, model, BASE, workload)
+        if base is None:
+            continue
+        full = tok_s(m8, model, labels[-1], workload)
+        rows.append(
+            [WORKLOAD_LABELS[workload], _f(base, 0), _f(dollars(base, dollars_per_hour), 2)]
+            + [_f(speedup(m8, model, label, workload), 2, "×") for label in labels[1:]]
+            + [_f(dollars(full, dollars_per_hour), 2)]
+        )
+    headers = (
+        ["Workload", "Base (tokens/s)", "Base ($ per 1M)"]
+        + [f"`{label}`" for label in labels[1:]]
+        + [f"`{labels[-1]}` ($ per 1M)"]
+    )
+    return markdown_table(headers, rows)
+
+
+def step_table(m8: Records, model: str, workload: str, dollars_per_hour: float) -> str:
+    """One workload down the ladder: what each added technique did to speed, latency, cost and energy."""
+    steps = [BASE, "w", "wf", "wk", "wkp", "wkps", "akps"]
+    names = {
+        BASE: "stock BF16",
+        "w": "+ FP8 weights",
+        "wf": "(control: + FlashInfer, BF16 cache)",
+        "wk": "+ FP8 KV cache",
+        "wkp": "+ prefix caching",
+        "wkps": "+ speculative decoding",
+        "akps": "(branch: INT4 weights instead of FP8)",
+    }
+    rows = []
+    previous = None
+    for label in steps:
+        rate = tok_s(m8, model, label, workload)
+        if rate is None:
+            continue
+        start = next(
+            (m for m in _sorted(m8, "server_start") if (m["model"], m["label"]) == (model, label)), {}
+        )
+        rows.append(
+            [
+                names[label],
+                f"`{label}`",
+                _f(rate, 0),
+                _f(speedup(m8, model, label, workload), 2, "×"),
+                _f(rate / previous, 2, "×") if previous and label in LADDER else DASH,
+                _f(stat(m8, model, label, workload, "tpot_ms"), 1),
+                _f(stat(m8, model, label, workload, "ttft_ms"), 0),
+                _f(dollars(rate, dollars_per_hour), 2),
+                _f(tokens_per_joule(m8, model, label, workload), 1),
+                f"{start['kv_cache_tokens']:,}" if start.get("kv_cache_tokens") else DASH,
+            ]
+        )
+        if label in LADDER:
+            previous = rate
+    headers = [
+        "Step",
+        "Server",
+        "Tokens/s",
+        "vs base",
+        "vs previous step",
+        "TPOT p50 (ms)",
+        "TTFT p50 (ms)",
+        "$ per 1M tokens",
+        "Tokens per joule",
+        "KV cache (tokens)",
+    ]
+    return markdown_table(headers, rows)
+
+
+def alone_and_in_stack(
+    m8: Records, model: str, letter: str, workload: str
+) -> tuple[float | None, float | None]:
+    """A technique's two honest numbers: added to nothing, and what the full stack loses without it."""
+    return speedup(m8, model, letter, workload), speedup(
+        m8, model, FULL, workload, over=without(FULL, letter)
+    )
+
+
+def leave_one_out_table(m8: Records, model: str) -> str:
+    """Per workload and technique: its speedup alone, and the full stack's over the stack without it."""
+    rows = []
+    for workload in WORKLOADS:
+        cells = [WORKLOAD_LABELS[workload]]
+        for letter in TECHNIQUES:
+            alone, in_stack = alone_and_in_stack(m8, model, letter, workload)
+            cells.append(f"{_f(alone, 2, '×')} · {_f(in_stack, 2, '×')}")
+        if any(c != f"{DASH} · {DASH}" for c in cells[1:]):
+            rows.append(cells)
+    headers = ["Workload"] + [f"{name}: alone · in the full stack" for name in TECHNIQUES.values()]
+    return markdown_table(headers, rows)
+
+
+def interaction(m8: Records, model: str, a: str, b: str, workload: str) -> float | None:
+    """S(a + b) / (S(a) · S(b)): 1 = the gains multiply, below 1 = they compete."""
+    both = speedup(m8, model, label_pair(a, b), workload)
+    sa, sb = speedup(m8, model, a, workload), speedup(m8, model, b, workload)
+    return both / (sa * sb) if both and sa and sb else None
+
+
+def label_pair(a: str, b: str) -> str:
+    return "".join(letter for letter in TECHNIQUES if letter in (a, b))
+
+
+def pairs() -> list[tuple[str, str]]:
+    letters_ = list(TECHNIQUES)
+    return [(a, b) for i, a in enumerate(letters_) for b in letters_[i + 1 :]]
+
+
+def interaction_table(m8: Records, model: str) -> str:
+    rows = []
+    for a, b in pairs():
+        cells = [f"{TECHNIQUES[a]} + {TECHNIQUES[b]}", f"`{label_pair(a, b)}`"]
+        cells += [_f(interaction(m8, model, a, b, w), 2) for w in WORKLOADS[:4]]
+        rows.append(cells)
+    return markdown_table(["Pair", "Server"] + [WORKLOAD_LABELS[w] for w in WORKLOADS[:4]], rows)
+
+
+def repeat_differences(m8: Records, model: str) -> list[tuple[str, str, float]]:
+    """(label, workload, second run ÷ first − 1) for every server that ran twice."""
+    out = []
+    for label in labels_run(m8, model):
+        if label.endswith("-r2"):
+            for workload in WORKLOADS:
+                first, second = tok_s(m8, model, label[:-3], workload), tok_s(m8, model, label, workload)
+                if first and second:
+                    out.append((label[:-3], workload, second / first - 1))
+    return out
+
+
+def repeat_table(m8: Records, model: str) -> str:
+    rows = [
+        [f"`{label}`", WORKLOAD_LABELS[workload], _f(100 * diff, 1, "%")]
+        for label, workload, diff in repeat_differences(m8, model)
+    ]
+    return markdown_table(["Server", "Workload", "Second run vs first, tokens/s"], rows)
+
+
+def kept_table(m8: Records, model: str) -> str:
+    """Tokens per target pass with the EAGLE head, per workload and stack: what speculation worked with."""
+    labels = [
+        label for label in ("s", "ws", "ks", "ps", "wkps", "akps") if serving(m8, model, label, "m8_latency")
+    ]
+    rows = []
+    for workload in WORKLOADS:
+        cells = [WORKLOAD_LABELS[workload]]
+        for label in labels:
+            m = serving(m8, model, label, workload)
+            cells.append(_f(tokens_per_pass(m) if m else None, 2))
+        rows.append(cells)
+    return markdown_table(["Workload"] + [f"`{label}`" for label in labels], rows)
+
+
+def energy_table(m8: Records, model: str) -> str:
+    rows = []
+    for workload in WORKLOADS:
+        base, full = (tokens_per_joule(m8, model, label, workload) for label in (BASE, FULL))
+        if base is None:
+            continue
+        rows.append(
+            [
+                WORKLOAD_LABELS[workload],
+                _f(power(m8, model, BASE, workload), 0),
+                _f(power(m8, model, FULL, workload), 0),
+                _f(base, 2),
+                _f(full, 2),
+                _f(full / base if full else None, 2, "×"),
+            ]
+        )
+    headers = [
+        "Workload",
+        "Power, base (W)",
+        "Power, full stack (W)",
+        "Tokens per joule, base",
+        "Full stack",
+        "Change",
+    ]
+    return markdown_table(headers, rows)
+
+
+def failures_table(m8: Records) -> str:
+    rows = [[f"`{m['name']}`", m["error"][:160]] for m in _sorted(m8, "m8_failure")]
+    return markdown_table(["Server", "Error"], rows) if rows else "*Every server of the plan ran.*"
+
+
+# ---- the frozen predictions against M8 ---------------------------------------------------------------------
+
+
+def prediction_errors(m8: Records, frozen_file: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every frozen prediction that has a measurement: predicted and measured tokens/s, and the error."""
+    rows = []
+    for pred in frozen_file["predictions"]:
+        got = tok_s(m8, pred["model"], pred["label"], pred["workload"])
+        if got:
+            rows.append({**pred, "measured": got, "error": pred["tok_s"] / got - 1})
+    return rows
+
+
+def _median_abs(values: list[float]) -> float | None:
+    return fit.median_abs(values)
+
+
+def model_error_table(m8: Records, frozen_file: dict[str, Any]) -> str:
+    """The frozen predictions' error on M8, by workload and by whether speculation was on."""
+    rows_ = prediction_errors(m8, frozen_file)
+    groups: list[tuple[str, list[dict[str, Any]]]] = [
+        (WORKLOAD_LABELS[w], [r for r in rows_ if r["workload"] == w]) for w in WORKLOADS
+    ]
+    groups += [
+        ("Servers without speculation", [r for r in rows_ if "s" not in letters(r["label"])]),
+        ("Servers with speculation", [r for r in rows_ if "s" in letters(r["label"])]),
+        ("Qwen3-1.7B", [r for r in rows_ if r["model"] == LARGE]),
+        ("Qwen3-0.6B", [r for r in rows_ if r["model"] == SMALL]),
+        ("**All**", rows_),
+    ]
+    rows = []
+    for name, group in groups:
+        errs = [r["error"] for r in group]
+        if not errs:
+            continue
+        rows.append(
+            [
+                name,
+                str(len(errs)),
+                _f(100 * _median_abs(errs), 1, "%"),
+                _f(100 * sorted(errs)[len(errs) // 2], 1, "%"),
+                _f(100 * max(abs(e) for e in errs), 0, "%"),
+                _f(100 * sum(abs(e) <= 0.15 for e in errs) / len(errs), 0, "%"),
+            ]
+        )
+    headers = ["Points", "Count", "Median error", "Median signed error", "Worst", "Within 15%"]
+    return markdown_table(headers, rows)
+
+
+def worst_predictions(m8: Records, frozen_file: dict[str, Any], n: int = 10) -> str:
+    rows_ = sorted(prediction_errors(m8, frozen_file), key=lambda r: -abs(r["error"]))[:n]
+    rows = [
+        [
+            r["model"].split("/")[-1],
+            f"`{r['label']}`",
+            WORKLOAD_LABELS[r["workload"]],
+            _f(r["measured"], 0),
+            _f(r["tok_s"], 0),
+            _f(100 * r["error"], 0, "%"),
+        ]
+        for r in rows_
+    ]
+    return markdown_table(["Model", "Server", "Workload", "Measured tok/s", "Predicted", "Error"], rows)
+
+
+def m8_points(
+    m8: Records, config: dict[str, Any], configs: dict[str, Any], workloads: dict[str, Any]
+) -> list[Point]:
+    """M8's loads as points with their *measured* inputs (lengths, in-flight requests, tokens per pass, cache
+    size): what the model says when it is told what actually happened, instead of what was expected."""
+    head = config["techniques"]["s"]["head"]
+
+    def stack_for(m: dict[str, Any]) -> Stack | None:
+        on = letters(m["server"])
+        kept = tokens_per_pass(m) if "s" in on else None
+        if "s" in on and kept is None:
+            return None
+        return stack_of(m["server"], configs[m["model"]], kept, head)
+
+    points = _points("m8", m8, stack_for, workloads)
+    # Only the capacity workload is limited by the cache; elsewhere its size is irrelevant.
+    return [
+        p if p.workload == "capacity" else replace(p, load=replace(p.load, kv_tokens=None)) for p in points
+    ]
+
+
+def informed_error_table(points: list[Point], configs: dict[str, Any], hw: Hardware, cal: Calibration) -> str:
+    """The same frozen constants, fed M8's measured inputs: separates wrong physics from wrong assumptions."""
+    rows = []
+    for workload in WORKLOADS:
+        subset = [p for p in points if p.workload == workload and not p.label.endswith("-r2")]
+        errs = fit.errors(subset, configs, hw, cal)
+        if errs:
+            rows.append(
+                [
+                    WORKLOAD_LABELS[workload],
+                    str(len(errs)),
+                    _f(100 * _median_abs(errs), 1, "%"),
+                    _f(100 * max(abs(e) for e in errs), 0, "%"),
+                    _f(100 * sum(abs(e) <= 0.15 for e in errs) / len(errs), 0, "%"),
+                ]
+            )
+    everything = fit.errors([p for p in points if not p.label.endswith("-r2")], configs, hw, cal)
+    if everything:
+        rows.append(
+            [
+                "**All**",
+                str(len(everything)),
+                _f(100 * _median_abs(everything), 1, "%"),
+                _f(100 * max(abs(e) for e in everything), 0, "%"),
+                _f(100 * sum(abs(e) <= 0.15 for e in everything) / len(everything), 0, "%"),
+            ]
+        )
+    return markdown_table(["Workload", "Count", "Median error", "Worst", "Within 15%"], rows)
+
+
+# ---- quality and cost --------------------------------------------------------------------------------------
+
+
+def quality_table(m8: Records, m5: Records, m4: Records, m2_quality: Records) -> str:
+    """The lossy parts of the stack, alone and together, in vLLM: perplexity, needle recall, task scores."""
+    from fastserve.report import m4 as m4_report
+
+    def one(records: Records, experiment: str, **match: Any) -> dict[str, Any]:
+        found = [m for m in _sorted(records, experiment) if all(m.get(k) == v for k, v in match.items())]
+        return found[-1] if found else {}
+
+    rows = []
+    for model in (SMALL, LARGE):
+        stacks = [
+            (
+                "BF16",
+                one(m4, "m4_vllm_perplexity", model=model, format="bf16"),
+                one(m2_quality, "quality_needle", model=model),
+                m4_report.tasks(m4, m2_quality, model, "bf16"),
+            ),
+            (
+                "FP8 weights (`w`)",
+                one(m4, "m4_vllm_perplexity", model=model, format="fp8"),
+                {},
+                m4_report.tasks(m4, m2_quality, model, "fp8"),
+            ),
+            (
+                "FP8 KV cache (`k`)",
+                one(m5, "m5_vllm_perplexity", model=model),
+                one(m5, "m5_vllm_needle", model=model),
+                {},
+            ),
+            (
+                "FP8 weights + FP8 KV (`wk`)",
+                one(m8, "m8_perplexity", model=model),
+                one(m8, "m8_needle", model=model),
+                {
+                    t: 100 * v["score"]
+                    for t, v in one(m8, "m8_tasks", model=model).get("scores", {}).items()
+                    if v.get("score") is not None
+                },
+            ),
+        ]
+        for name, ppl, needle, scores in stacks:
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    name,
+                    _f(ppl.get("perplexity"), 2),
+                    _f(100 * needle["pass_rate"], 0, "%") if "pass_rate" in needle else DASH,
+                    *(_f(scores.get(task), 1) for task in ("gsm8k", "mmlu", "humaneval")),
+                ]
+            )
+    headers = [
+        "Model",
+        "Stack",
+        "Perplexity",
+        "Needle recall",
+        "GSM8K (%)",
+        "MMLU (%)",
+        "HumanEval pass@1 (%)",
+    ]
+    return markdown_table(headers, rows)
+
+
+def cost_table(m8: Records, dollars_per_hour: float) -> str:
+    """The final cost table: $ per 1M output tokens, stock BF16 against the full stack, per workload."""
+    rows = []
+    for model in (SMALL, LARGE):
+        for workload in WORKLOADS:
+            base, full = tok_s(m8, model, BASE, workload), tok_s(m8, model, FULL, workload)
+            if not base:
+                continue
+            int4 = tok_s(m8, model, "akps", workload)
+            rows.append(
+                [
+                    model.split("/")[-1],
+                    WORKLOAD_LABELS[workload],
+                    _f(dollars(base, dollars_per_hour), 2),
+                    _f(dollars(full, dollars_per_hour), 2),
+                    _f(base and full and full / base, 2, "×") if full else DASH,
+                    _f(dollars(int4, dollars_per_hour), 2),
+                ]
+            )
+    headers = [
+        "Model",
+        "Workload",
+        "Stock BF16 ($ per 1M)",
+        "Full stack ($ per 1M)",
+        "Cheaper by",
+        "Full stack with INT4 weights ($ per 1M)",
+    ]
+    return markdown_table(headers, rows)
