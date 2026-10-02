@@ -1064,9 +1064,13 @@ def m8_records() -> list[dict[str, Any]]:
             tok_s = rate(label, workload)
             rows = [[i, 100, 50, 0.0, float(i), i + 0.05, i + 1.0, 0] for i in range(4)]
             accepted = 500.0 if "s" in on else 0.0  # of 1,000 generated: two tokens per pass
+            passes = 1000.0 - accepted  # engine steps: one per pass
             timeline = {
-                "columns": ["t", "running", "generation_tokens", "spec_accepted"],
-                "rows": [[0.0, users[workload], 0.0, 0.0], [10.0, users[workload], 1000.0, accepted]],
+                "columns": ["t", "running", "generation_tokens", "spec_accepted", "steps"],
+                "rows": [
+                    [0.0, users[workload], 0.0, 0.0, 0.0],
+                    [10.0, users[workload], 1000.0, accepted, passes],
+                ],
                 "power": {"mean_w": 70.0, "max_w": 72.0, "n_samples": 100, "seconds": 10.0},
             }
             add(
@@ -1087,6 +1091,40 @@ def m8_records() -> list[dict[str, Any]]:
                 },
             )
     add("m8_failure", {"name": "0.6b-wks", "error": "RuntimeError: vLLM exited during startup"})
+    for kind, host in (("prefill plan", 0.14), ("prefill run", 0.04), ("graph decode plan", 0.1)):
+        times = {"host_ms": {"p50": host}, "total_ms": {"p50": host + 0.01}}
+        add("m8_plan_cost", {"model": model, "kind": kind, "batch": 1, "context": 600, **times})
+    add(
+        "m8_plan_cost",
+        {"model": model, "kind": "decode run", "batch": 1, "context": 600, "error": "TypeError"},
+    )
+    profile = {
+        "name": "1.7b-fs",
+        "label": "fs",
+        "model": model,
+        "iterations": 24,
+        "span_ms": 960.0,
+        "gpu_ms": 480.0,
+        "host": [
+            {
+                "cat": "cuda_runtime",
+                "name": "cudaGraphLaunch",
+                "calls": 744,
+                "self_ms": 20.0,
+                "total_ms": 20.0,
+            },
+            {
+                "cat": "cuda_runtime",
+                "name": "cudaLaunchKernel",
+                "calls": 2400,
+                "self_ms": 40.0,
+                "total_ms": 40.0,
+            },
+        ],
+        "gpu": [],
+        "annotations": [],
+    }
+    add("m8_profile", profile)
     add("m8_perplexity", {"model": model, "label": "wk", "perplexity": 20.4, "positions": 1000})
     add("m8_needle", {"model": model, "label": "wk", "pass_rate": 1.0, "cells": []})
     scores = {"gsm8k": {"score": 0.5}, "mmlu": {"score": 0.6}, "humaneval": {"score": 0.3}}

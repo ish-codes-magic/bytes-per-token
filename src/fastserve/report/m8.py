@@ -11,6 +11,7 @@ Two halves:
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -969,34 +970,67 @@ def m8_points(
     ]
 
 
-def informed_error_table(points: list[Point], configs: dict[str, Any], hw: Hardware, cal: Calibration) -> str:
-    """The same frozen constants, fed M8's measured inputs: separates wrong physics from wrong assumptions."""
-    rows = []
-    for workload in WORKLOADS:
-        subset = [p for p in points if p.workload == workload and not p.label.endswith("-r2")]
-        errs = fit.errors(subset, configs, hw, cal)
-        if errs:
-            rows.append(
-                [
-                    WORKLOAD_LABELS[workload],
-                    str(len(errs)),
-                    _f(100 * _median_abs(errs), 1, "%"),
-                    _f(100 * max(abs(e) for e in errs), 0, "%"),
-                    _f(100 * sum(abs(e) <= 0.15 for e in errs) / len(errs), 0, "%"),
-                ]
-            )
-    everything = fit.errors([p for p in points if not p.label.endswith("-r2")], configs, hw, cal)
-    if everything:
-        rows.append(
-            [
-                "**All**",
-                str(len(everything)),
-                _f(100 * _median_abs(everything), 1, "%"),
-                _f(100 * max(abs(e) for e in everything), 0, "%"),
-                _f(100 * sum(abs(e) <= 0.15 for e in everything) / len(everything), 0, "%"),
-            ]
-        )
-    return markdown_table(["Workload", "Count", "Median error", "Worst", "Within 15%"], rows)
+def host_step_ms(m8: Records) -> float | None:
+    """What the host needs per pass on piecewise graphs: the median step time, at one user, of the
+    deployable servers that lost their full graph (FP8 KV with speculation), both models.
+
+    These servers are host-bound at one user (their GPUs idle, their step times do not follow the model
+    size), so their step time *is* the host's time.
+    """
+    times = []
+    for model in (SMALL, LARGE):
+        for label in candidates(m8, model):
+            on = letters(label)
+            if "k" in on and "s" in on and (ms := step_ms(m8, model, label)) is not None:
+                times.append(ms)
+    return statistics.median(times) if times else None
+
+
+def informed_calibration(cal: Calibration, m8: Records) -> Calibration:
+    """The frozen constants plus the one M8 taught: the host's time per pass on piecewise graphs."""
+    host = host_step_ms(m8)
+    return replace(cal, host_step_s=host / 1e3) if host else cal
+
+
+def informed_error_table(
+    points: list[Point], configs: dict[str, Any], hw: Hardware, cal: Calibration, informed: Calibration
+) -> str:
+    """The model fed M8's measured inputs: with the frozen constants, then with the host term added.
+
+    The first column pair separates wrong physics from wrong assumptions about the load. The second shows
+    how much of what is left one constant removes. That constant was fitted on these same points, so the
+    second pair is a description, not a prediction.
+    """
+
+    def cells(subset: list[Point], calibration: Calibration) -> list[str]:
+        errs = fit.errors(subset, configs, hw, calibration)
+        if not errs:
+            return [DASH, DASH]
+        within = 100 * sum(abs(e) <= 0.15 for e in errs) / len(errs)
+        return [_f(100 * _median_abs(errs), 1, "%"), _f(within, 0, "%")]
+
+    kept = [p for p in points if not p.label.endswith("-r2")]
+    collide = [p for p in kept if p.stack.piecewise]
+    groups = [(WORKLOAD_LABELS[w], [p for p in kept if p.workload == w]) for w in WORKLOADS]
+    groups += [
+        ("Servers with FP8 KV and speculation", collide),
+        ("All other servers", [p for p in kept if not p.stack.piecewise]),
+        ("**All**", kept),
+    ]
+    rows = [
+        [name, str(len(subset)), *cells(subset, cal), *cells(subset, informed)]
+        for name, subset in groups
+        if subset
+    ]
+    headers = [
+        "Points",
+        "Count",
+        "Median error, frozen constants",
+        "Within 15%",
+        "Median error, with the host term",
+        "Within 15%",
+    ]
+    return markdown_table(headers, rows)
 
 
 # ---- quality and cost --------------------------------------------------------------------------------------

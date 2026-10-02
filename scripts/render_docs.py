@@ -203,12 +203,36 @@ def m8_blocks(
             "m8_failures": m8_report.failures_table(m8),
             "m8_model_errors": m8_report.model_error_table(m8, frozen),
             "m8_model_worst": m8_report.worst_predictions(m8, frozen),
-            "m8_model_informed": m8_report.informed_error_table(measured_points, configs, hw, cal),
+            "m8_model_informed": m8_report.informed_error_table(
+                measured_points, configs, hw, cal, m8_report.informed_calibration(cal, m8)
+            ),
             "m8_quality": m8_report.quality_table(m8, earlier["m5"], earlier["m4"], m2_quality),
             "m8_cost": m8_report.cost_table(m8, price),
             "m8_kernel_projection": m8_report.kernel_projection_table(m8, m7, configs),
+            # the stack that is not the best stack, and why
+            "m8_collision": m8_report.collision_table(m8, LARGE),
+            "m8_host_chain": m8_report.host_chain_table(m8),
+            "m8_plan_cost": m8_report.plan_cost_table(m8),
+            "m8_profiles_large": m8_report.profile_table(m8, ["1.7b-s", "1.7b-sg", "1.7b-fs"]),
+            "m8_profiles_small": m8_report.profile_table(m8, ["0.6b-w", "0.6b-g", "0.6b-wg"]),
+            "m8_fallback_message": f"> {m8_report.fallback_message(m8, LARGE, 'ks')}",
+            "m8_host_step_ms": f"{m8_report.host_step_ms(m8):.0f}",
         }
     )
+    for model, size in ((LARGE, "large"), (SMALL, "small")):
+        perplexity = m8_report.perplexities(m8, earlier["m5"], earlier["m4"], model)
+        blocks[f"m8_best_{size}"] = m8_report.best_table(m8, model, perplexity)
+    controls = m8_report.control_observables(m8)
+    rounds = {
+        "1": "m8_controls.json",
+        "2": "m8_controls2.json",
+        "3": "m8_controls3.json",
+        "4": "m8_controls4.json",
+    }
+    for name, file in {**rounds, "plan": "m8_plan.json"}.items():
+        ranged = json.loads((predictions / file).read_text(encoding="utf-8"))
+        blocks[f"m8_controls_{name}"] = prediction_table(ranged, controls)
+        blocks[f"m8_controls_{name}_score"] = prediction_score(ranged, controls)
     for workload in m8_report.WORKLOADS:
         for model, size in ((LARGE, "large"), (SMALL, "small")):
             blocks[f"m8_steps_{workload}_{size}"] = m8_report.step_table(m8, model, workload, price)

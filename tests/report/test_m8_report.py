@@ -146,6 +146,38 @@ def test_the_collision_table_puts_controls_next_to_what_they_explain(m8_records)
     assert observed["control_aps_multi_turn"] == pytest.approx(1.2 * 2.0 * 1.2)
 
 
+def test_the_hosts_chain_is_read_from_the_servers_that_lost_their_graph(m8_records):
+    assert m8.step_ms(m8_records, LARGE, "base") == pytest.approx(10.0)  # 1,000 steps in 10 s
+    assert m8.step_ms(m8_records, LARGE, "ks") == pytest.approx(20.0)  # 500 passes of two tokens
+    assert m8.step_ms(m8_records, LARGE, "nope") is None
+    table = m8.host_chain_table(m8_records)
+    assert "| Qwen3-1.7B | `g` | BF16 | FlashAttention | no | 10.0 | 10.0 (`base`) | 70 | 70 |" in table
+    assert "| Qwen3-1.7B | `fs` | BF16 | FlashInfer | yes | 20.0 | 20.0 (`s`) | 70 | 70 |" in table
+    assert "| Qwen3-1.7B | `wkps` | FP8 | FlashInfer | yes | 20.0 | 20.0 (`wps`) | 70 | 70 |" in table
+    assert "| `base` |" not in table and "| `s` |" not in table  # servers with a full graph are not listed
+    assert m8.host_step_ms(m8_records) == pytest.approx(20.0)  # ks, wks, kps, wkps, akps
+    assert m8.host_step_ms([]) is None
+    from fastserve.perfmodel.serving import Calibration
+
+    assert m8.informed_calibration(Calibration(), m8_records).host_step_s == pytest.approx(0.020)
+    assert m8.informed_calibration(Calibration(), []).host_step_s == 0.0
+
+
+def test_call_costs_and_profiles(m8_records):
+    assert m8.plan_cost(m8_records, "prefill plan") == pytest.approx(0.14)
+    assert m8.plan_cost(m8_records, "prefill plan", what="total_ms") == pytest.approx(0.15)
+    assert m8.plan_cost(m8_records, "decode run") is None  # that call failed: no time
+    table = m8.plan_cost_table(m8_records)
+    plan = "per pass with several tokens per sequence (a speculative pass)"
+    assert f"| prefill plan | {plan} | 0.140 · 0.150 |" in table
+    assert "| decode run | per layer, one token per sequence | — · — |" in table
+    profiles = m8.profile_table(m8_records, ["1.7b-fs", "1.7b-none"])
+    assert "| `fs` | piecewise | 40.0 | 20.0 | 50% | 31 | 100 |" in profiles
+    observed = m8.control_observables(m8_records)
+    assert observed["pass_host_ms"] == pytest.approx(28 * 0.04 + 4 * 0.14)
+    assert observed["control_small_g_step_ms"] is None  # the small model is not in this fixture
+
+
 def test_observables(m8_records, m4_records):
     obs = m8.m8_observables(m8_records, FROZEN, m4_records, [])
     assert obs["full_latency"] == pytest.approx(2.16) and obs["full_capacity"] == pytest.approx(2.16)
