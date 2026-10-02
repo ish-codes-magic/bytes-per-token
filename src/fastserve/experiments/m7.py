@@ -230,9 +230,13 @@ def attention_case(
         entry = {"cache_bytes": nbytes, **extra, **_measure(fn, timing, flush=flush)}
         if "ms" in entry:
             entry["gbps"] = nbytes / (entry["ms"] / 1e3) / 1e9
-            # The same call without the flush. If its data fits in L2 and it gets no faster, memory was not
-            # what limited it.
-            entry["warm_ms"] = _measure(fn, timing).get("ms")
+            # Two more views of the same call. `ms` above is GPU time with a cold cache: the flush keeps the
+            # GPU busy while Python queues the call, so launch overhead hides behind it.
+            # eager_ms: no flush, so the GPU waits for Python: what an eager engine pays for short work.
+            # graph_ms: replayed from a CUDA graph, cache warm: no Python, and no trip to memory if the data
+            #           fits in L2. A kernel that is no faster here than cold was not limited by memory.
+            entry["eager_ms"] = _measure(fn, timing).get("ms")
+            entry["graph_ms"] = _measure_graph(fn, timing).get("ms")
             got = fn().float().reshape(batch, hq, d)
             if exact is not None:  # how far from attention over the unquantized cache
                 entry["error_vs_bf16"] = ((got - exact).norm() / exact.norm()).item()
