@@ -10,7 +10,7 @@ implementation, then benchmarked in a real serving engine.
 All experiments use **Qwen3-0.6B and Qwen3-1.7B** on a single **NVIDIA L4** (serverless, billed per second), and
 everything is reproducible in the cloud with one command.
 
-> **Status:** 🚧 In progress: Milestone 7 (custom Triton kernels). Results appear below as each milestone lands.
+> **Status:** 🚧 Milestone 7 (custom Triton kernels) is built and at its gate review. Results appear below as each milestone lands.
 
 ---
 
@@ -158,8 +158,8 @@ Which format wins depends on the batch. INT4 reads the fewest bytes; FP8 has the
 
 What M4 found:
 - **Bytes explain speed.** Bytes read ÷ measured bandwidth, plus one fixed overhead fitted on BF16, predicts
-  INT4's batch-1 latency almost exactly. W8A8 runs slower than its bytes predict, because vLLM quantizes every
-  layer's input in a separate pass. Fusing that pass is the first custom kernel (M7).
+  INT4's batch-1 latency almost exactly. W8A8 runs slower than its bytes predict. M4 blamed the separate pass
+  in which vLLM quantizes every layer's input; M7 measured that pass and it covers under half of the gap.
 - **The kernels are faithful.** vLLM's perplexity with its low-bit kernels matches our PyTorch simulation of the
   same rounded weights, so M3's quality results carry over to production.
 - **A task score can hide *how* a model fails.** Part of GPTQ's GSM8K loss is the model not stopping after its
@@ -262,6 +262,83 @@ What M6 found:
 Details are in the [M6 learning doc](docs/learning/M6-speculative-decoding.md) and the
 [gate report](docs/gates/M6-report.md).
 
+### M7: custom Triton kernels
+
+Two kernels, each chosen from a profile, each with a plain-PyTorch reference and tests against it:
+
+1. **RMSNorm fused with INT8 activation quantization.** vLLM runs these as two kernels for INT8 checkpoints
+   (its fusion pass covers FP8 only).
+2. **Decode attention that reads a 4-bit KV cache directly.** M5 showed 4-bit keys and values keep quality,
+   by simulation. This kernel reads real codes without ever writing them back out as floats: the keys' grid
+   is folded into the query, the values' grid into the attention weights.
+
+One layer's decode attention, over batch and context length. Each panel isolates one thing:
+
+![Kernel 2 against PyTorch attention and FlashInfer](results/figures/m7_speedup.png)
+
+<!-- BEGIN GENERATED: caption-m7_speedup -->
+*Kernel 2 on INT4 codes is 1.3–16× the speed of nanoserve's PyTorch attention (0 of 15 shapes slower), and 0.44–2.63× FlashInfer's on a full-precision cache: fewer bytes win at long context, launch overhead decides the short ones.*
+<!-- END GENERATED: caption-m7_speedup -->
+
+Both kernels against the memory bandwidth measured in M0:
+
+![Kernel roofline](results/figures/m7_roofline.png)
+
+<!-- BEGIN GENERATED: caption-m7_roofline -->
+*At 1 × 32,768 tokens kernel 2 reads the BF16 cache at 88% of the measured bandwidth and the INT4 cache at 72%, where PyTorch's path manages 16%; kernel 1 moves its bytes at 90% once they no longer fit in the cache (above the line, the data is in L2).*
+<!-- END GENERATED: caption-m7_roofline -->
+
+Quality with the real codes, every token decoded through the kernel:
+
+<!-- BEGIN GENERATED: m7_quality -->
+| KV cache and reader | KL vs BF16 cache (nats) | Same top token | Perplexity | BF16 perplexity | M5's simulated KL | Needle recall | M5's simulated recall |
+|---|---|---|---|---|---|---|---|
+| BF16 + kernel 2 | 0.0011 | 98.3% | 29.29 | 29.28 | — | — | — |
+| INT8 codes + kernel 2 | 0.0012 | 98.2% | 29.30 | 29.28 | 0.0014 | — | 100% |
+| INT4 codes + kernel 2 | 0.011 | 94.4% | 29.55 | 29.28 | 0.032 | 100% | 100% |
+<!-- END GENERATED: m7_quality -->
+
+Inside the from-scratch engine, every GPU kernel of one decode step, before and after:
+
+![One decode step, before and after](results/figures/m7_timeline.png)
+
+<!-- BEGIN GENERATED: caption-m7_timeline -->
+*One decode step at 1 × 16,384 tokens: the GPU works 69 of 72 ms before and 12 of 73 ms after; what is left is 2,582 small kernels with gaps between them (Python between launches), which no attention kernel can shorten.*
+<!-- END GENERATED: caption-m7_timeline -->
+
+The kernels are not integrated into vLLM. What their timings imply for it, with the method checked against a
+step vLLM really ran (first row):
+
+<!-- BEGIN GENERATED: m7_projection -->
+*Short-context step: 5.8 ms; 28 layers.*
+
+| Attention kernel and cache | One layer (µs) | Projected vLLM step (ms) | Measured in vLLM (ms) | Projection error |
+|---|---|---|---|---|
+| FlashInfer, full-precision cache | 539 | 20.9 | 20.6 | 1.4% |
+| FlashInfer, timed with the write flush | 691 | 25.1 | 20.6 | 22.0% |
+| Kernel 2, BF16 cache | 580 | 22.0 | — | — |
+| Kernel 2, INT8 codes | 319 | 14.7 | — | — |
+| Kernel 2, INT4 codes | 205 | 11.5 | — | — |
+| vLLM's FP8 cache (measured only) | — | — | 13.8 | — |
+<!-- END GENERATED: m7_projection -->
+
+What M7 found:
+- **Fewer bytes win at long context, launches decide the short ones.** On the same full-precision bytes
+  FlashInfer, vLLM's hand-tuned attention library, is slightly faster than the Triton kernel. On 4-bit codes
+  the kernel overtakes it once the cache is a few thousand tokens long.
+- **"Memory-bound" is a claim to test.** The 4-bit path turned out to be limited by arithmetic per token, not
+  memory: replayed warm from a CUDA graph, with its whole cache in L2, it is no faster than cold.
+- **A faster kernel only shortens a step that waits on the GPU.** In the reference engine, fusing attention
+  cut the GPU's work per step several times over, and then Python between kernel launches became the limit.
+- **Measure the measurement.** The project's cold-cache timings carried a constant bias from how the cache
+  was evicted. A warm replay that was *faster* than a cold run of data too big for the cache exposed it.
+- **Fusing norm and quantization** pays inside a CUDA graph (one launch instead of two; fewer bytes at
+  prefill sizes) and not at all when launched from Python on small inputs. In vLLM's decode step the
+  ceiling is small.
+
+Details are in [docs/04-kernels.md](docs/04-kernels.md), the
+[M7 learning doc](docs/learning/M7-triton-kernels.md) and the [gate report](docs/gates/M7-report.md).
+
 ---
 
 ## Why small models on a small GPU?
@@ -314,7 +391,7 @@ Two sizes from one family show **how each gain changes with model size**.
 | M4 | Quantization in production: format crossover vs batch size | ✅ Done |
 | M5 | KV-cache quantization and prefix caching | ✅ Done |
 | M6 | Speculative decoding, proven lossless | ✅ Done |
-| M7 | Custom Triton kernels | 🚧 In progress |
+| M7 | Custom Triton kernels: fused norm + INT8, attention over a 4-bit KV cache | 🚧 At gate review |
 | M8 | Full-stack ablation across model sizes, performance model | ⏳ |
 | M9 | Dashboard, write-up, one-command reproduction | ⏳ |
 
